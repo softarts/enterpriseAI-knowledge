@@ -1,0 +1,44 @@
+# OKF 文档转换配置文件
+# 用于 import_raw_doc_to_okf.py
+
+# 元数据映射规则
+metadata:
+  defaults:
+    author: "unknown"
+    # 特殊值 "file_timestamp" 表示使用文件的修改时间作为 created_at
+    created_at: "file_timestamp"
+    tags: []
+
+# 标签自动匹配规则
+# 根据源文件路径中包含的关键词自动打标签
+tag_rules:
+  - match_path: "finance"
+    tags:
+      - finance
+  - match_path: "legal"
+    tags:
+      - legal
+  - match_path: "HR"
+    tags:
+      - HR
+  - match_path: "insurance"
+    tags:
+      - insurance
+  - match_path: "engineering"
+    tags:
+      - engineering
+  - match_path: "customer-success"
+    tags:
+      - customer-success
+  - match_path: "company-handbook"
+    tags:
+      - handbook
+
+# 输出配置
+output:
+  # 输出文件扩展名
+  format: "yaml"
+  # 目录结构策略: mirror = 保持与源目录相同的层次结构
+  structure: "mirror"
+  # 默认输出根目录（当命令行未指定 --output 时使用）
+  base_dir: "./generated"

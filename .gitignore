@@ -1,0 +1,5 @@
+enterpriseag-bench_all_documents/
+*.pyc
+*.zip
+enterpriserag-bench_all_documents/**
+
