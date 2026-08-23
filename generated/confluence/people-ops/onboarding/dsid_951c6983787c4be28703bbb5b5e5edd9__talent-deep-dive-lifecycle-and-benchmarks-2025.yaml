@@ -1,0 +1,138 @@
+---
+document_id: confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025
+title: talent-deep-dive-lifecycle-and-benchmarks-2025
+author: unknown
+created_at: '2026-04-22T18:24:00'
+updated_at: '2026-04-22T18:24:00'
+source_path: confluence/people-ops/onboarding/dsid_951c6983787c4be28703bbb5b5e5edd9__talent-deep-dive-lifecycle-and-benchmarks-2025.txt
+source_type: text
+tags: []
+---
+
+# talent-deep-dive-lifecycle-and-benchmarks-2025
+
+Summary
+
+This playbook describes the full contributor lifecycle at Redwood: from sourcing and hiring, through onboarding and early-impact milestones, to role progression, internal mobility, and offboarding. It combines role ladder checkpoints, measurable benchmarks, and the timeline for benefits and internal tool access. The goal is to provide a single reference for hiring managers, people-ops partners, and new joiners so expectations and operational steps are transparent and repeatable.
+
+Audience
+- Hiring managers
+- People-ops and talent partners
+- New contributors (ICs and managers)
+- Team leads and mentors
+
+High-level lifecycle phases
+1) Candidate -> Offer (sourcing, interview SLAs, offer approval)
+2) Day 0-30 (orientation, account access, first-10 tasks)
+3) Day 30-90 (early-impact, first review checkpoint)
+4) 3-12 months (competency growth, role certification)
+5) Rotation / Mobility windows (internal transfers)
+6) Offboarding / Knowledge transfer
+
+Checklist: pre-boarding (people-ops)
+- Offer accepted: trigger provisioning ticket (IT) within 4 business hours.
+- Badge and laptop order: placed within 24 hours.
+- Pre-boarding doc shared: template: onboarding/hello-email-template.
+- Mentor assigned: hiring manager nominates within 48 hours.
+
+Onboarding runbook (Day 0–30) — numbered steps
+1. Day 0 morning: Welcome sync (30 mins) with manager — goals for first week and first 30 days.
+2. Accounts: create and verify SSO, Slack, Google Workspace, Jira, Confluence, GitHub. Target: all accounts functional by EOD Day 0.
+3. Developer setup: dev VM or local environment (internal script)
+   - Example: curl -sL https://internal-install.redwood.example/install.sh | bash
+4. Training block (Week 1): security basics, infra orientation, product overview.
+5. First small PR: assigned by team lead by Day 5.
+6. 30-day check-in: manager and people-ops conduct a structured retrospective using the 30-day rubric.
+
+Role ladders and milestone mapping
+- Individual Contributor tiers: IC1 (Foundational), IC2 (Independent), IC3 (Senior), IC4 (Staff), IC5 (Principal)
+- Manager tiers: M1 (First-time manager), M2 (Manager of managers), M3 (Director-level)
+- Benchmarks (sample):
+   - IC2: delivers projects end-to-end with minimal design reviews; ownership of a small service; mentors new joiners
+   - IC3: influences cross-team design, measurable service-level improvements, 2+ mentees
+   - IC4: sets technical direction for multiple teams; owns roadmap outcomes
+
+Progression checkpoints and evidence (what we expect)
+- Evidence types: shipped PRs, architecture docs, customer-impact metrics, peer feedback, mentoring log, on-call incident leadership
+- Promotion cadence: typical earliest consideration at 9–12 months after hire for ICs demonstrating clear impact; exceptions require lead sponsor and people-ops signoff.
+
+Benefits & perks access timeline
+| Day | Benefit / Access | Notes |
+|-----|------------------|-------|
+| 0   | Basic payroll enrollment | Required forms processed on Day 0–3 |
+| 7   | Health benefits eligibility | Enrollment window opens; eligibility depends on contract |
+| 30  | Commuter/hybrid stipends | Pro-rated first month |
+| 90  | Equity vesting begins | Standard grant terms apply |
+| 180 | Parental leave (qualifying) | See family leave policy for full details |
+
+Hiring and interview SLAs (operational targets)
+- Phone screen scheduled within 72 hours of referral/ATS flag.
+- Onsite / loop scheduled within 10 business days after screen.
+- Offer approval (level + comp) turnaround within 3 business days for standard roles.
+- Target time-to-offer from req open: 28 days for most IC hires.
+
+Internal tools access matrix (high level)
+- Role-based baseline: Everyone: Slack, Google, Confluence, Notion-lite; Engineers: GitHub, CI write access after probation; SRE: PagerDuty on-call after training.
+- Escalation: If provisioning fails, open ticket via #it-provision and tag people-ops oncall.
+
+Table: access summary (ascii)
+| Resource        | New joiner day | After probation | Owner for approvals |
+|-----------------|----------------|-----------------|---------------------|
+| GitHub write    | Day 3          | Day 30          | Team Lead           |
+| Production creds| N/A (shadow)   | Day 90          | Security / Service Owner |
+| PagerDuty       | N/A            | Day 60          | SRE Manager         |
+
+Early-impact rubric (30/60/90 check-ins)
+- 30-day: environment, small PR shipped, initial feedback loop established.
+- 60-day: ownership of a non-trivial feature or operational task; demonstrates collaboration.
+- 90-day: measurable outcome tied to team KPIs; mentor responsibilities starting.
+
+Mobility windows and lateral moves
+- Internal transfer earliest eligibility: 6 months in current role (exceptions allowed with manager and people-ops approval).
+- Transfer steps:
+  1. Candidate discussion with receiving manager.
+  2. 1–2 interview loops focused on role differences.
+  3. Transfer approval: both managers + people-ops sign.
+  4. Official HR transfer effective date and new offer letter.
+
+Offboarding & knowledge transfer checklist
+- 30 days before: begin transition plan for ICs taking a full-time new employer role (if known).
+- Day 0 (last day): revoke access via automated offboard playbook; export ownership, update docs.
+- Post-offboard: exit interview and benefits continuation briefing.
+
+Metrics and quality gates (people-ops KPIs)
+- Time-to-provision: median target < 48 hours.
+- Time-to-first-PR: median target 7 days.
+- 90-day retention: target >= 92%.
+- Hiring funnel conversion: offer rate target 55%+ for engaged candidates.
+
+Sample templates and snippets
+- Quick welcome email (manager):
+  Subject: Welcome to Redwood — first steps
+  Hi {{name}}, excited to have you. Please join the 10:00 AM welcome call (calendar invite). Your laptop is expected to arrive by EOD Day 1.
+
+- Provisioning CLI sample for internal tooling (for onboarding engineer use):
+  rdxctl provision --user "jane.doe@redwood.com" --role engineer --env dev
+
+Owner and escalation
+- People-ops: primary owner for lifecycle policy and benefit coordination.
+- IT: owner for all provisioning tickets.
+- Security: approves elevated access, onboarding security modules.
+- Escalation path: manager -> people-ops partner -> Head of People -> CTO for disputed role-level exceptions.
+
+Related pages
+- /confluence/company-handbook/05_internal-tools/onboarding-toolchain-access-and-career-checkpoints-2025
+- /confluence/company-handbook/02_roles-and-career/competency-maps-and-rotation-paths-2027
+
+Change log
+- 2025-04-15: Created by Aisha Kapoor.
+- 2025-07-20: Updated: added access matrix and refined SLAs (reviewed by Jonah Kim, Marina Alvarez).
+
+FAQ (short)
+Q: How quickly will I get production access?
+A: Production credentials are granted on a case-by-case basis after successful probation and a security review; typical earliest is Day 60–90.
+
+Q: Can I apply for internal transfers before 6 months?
+A: Discuss with your manager; exceptions are sometimes approved for business-critical moves but require sponsor and people-ops signoff.
+
+If you spot missing links or need a different format (Confluence page export with native macros), ping people-ops@redwood.example.

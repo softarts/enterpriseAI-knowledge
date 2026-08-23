@@ -117,10 +117,10 @@ class OKFDocumentRepository:
             logger.error("YAML parse error in %s: %s", file_path, e)
             return None
 
-        document_id = self._generate_document_id(file_path)
+        document_id = metadata.get("document_id") or self._generate_document_id(file_path)
 
         return DocumentRecord(
-            document_id=document_id,
+            document_id=str(document_id),
             title=metadata.get("title", ""),
             author=metadata.get("author", "unknown"),
             created_at=metadata.get("created_at"),

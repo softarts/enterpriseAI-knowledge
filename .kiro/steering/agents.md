@@ -68,9 +68,25 @@ The current phase prohibits:
 
 Keep the implementation minimal and focused on the current phase's goal.
 
+## Rule: Raw Document Root Discovery, Mirrored Paths & Source Path Normalization
+
+All raw document ingestion pipelines (including OKF conversion and Embedding generation) MUST adhere to unified path and metadata normalization rules:
+
+1. **Raw Document Root Discovery**:
+   - The system automatically detects root directory names from candidates in priority order: `all_documents`, `raw_documents`, `documents`.
+   - When `--input` points to a single file or subdirectory inside one of these candidate folders (e.g. `all_documents/confluence/people-ops/xxx.txt`), the root prefix (`all_documents`) is stripped when determining relative mirror hierarchy.
+2. **Mirror Hierarchy Preservation**:
+   - Default output destinations (`generated/` for OKF, `embedding/` for Embeddings) MUST replicate the source subfolder hierarchy (e.g. `embedding/confluence/people-ops/xxx.json`).
+   - If `--output <dir>` is explicitly specified by the user, files are output directly to the specified destination directory without automatic mirroring.
+3. **Source Path Normalization**:
+   - Metadata `source_path` in both OKF and Embedded Chunk records MUST be normalized relative to the raw document root (e.g. `confluence/people-ops/xxx.txt`), using forward slashes (`/`).
+4. **Deterministic Document ID**:
+   - `document_id` computation MUST follow the canonical rule: replace path separators/underscores with `-`, lowercase, strip leading/trailing hyphens, and collapse consecutive hyphens.
+
 ## Available Skills
 
 The following skills can be loaded for detailed implementation guidance:
 
 - `enterprise-kb-architecture` — Full system architecture overview and principles
 - `api-service-layer` — Detailed API service layer implementation requirements, constraints, endpoint specs, and verification checklist
+

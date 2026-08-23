@@ -12,6 +12,7 @@ import_raw_doc_to_okf.py
 import argparse
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -180,14 +181,110 @@ def extract_html(file_path: Path) -> str:
 
 
 def extract_text_file(file_path: Path) -> str:
-    """直接读取纯文本文件。"""
+    """直接读取纯文本文件，支持多种编码格式。"""
+    encodings = ["utf-8-sig", "utf-8", "gbk", "latin-1"]
+    for enc in encodings:
+        try:
+            with open(file_path, "r", encoding=enc) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 
 
 # ---------------------------------------------------------------------------
+# Text structure normalization (TXT -> Markdown)
+# ---------------------------------------------------------------------------
+def normalize_txt_structure(text: str) -> str:
+    """
+    标准化 TXT 文本的 Markdown 结构：
+    - 保持已有 Markdown 标题（# / ## / ###）、列表、表格、代码块
+    - 将 Setext 标题（=== / ---）转换为标准 Markdown 标题
+    - 保证代码块内部内容完整不受修改
+    - 对不确定的行保留为普通正文，不进行臆测
+    """
+    raw_lines = text.splitlines()
+    if not raw_lines:
+        return ""
+
+    result_lines: List[str] = []
+    in_code_block = False
+    code_fence = ""
+    i = 0
+    num_lines = len(raw_lines)
+
+    while i < num_lines:
+        line = raw_lines[i]
+        stripped = line.strip()
+
+        # 检测代码块开关
+        fence_match = re.match(r"^(\`\`\`|\~\~\~)", stripped)
+        if fence_match:
+            fence = fence_match.group(1)
+            if not in_code_block:
+                in_code_block = True
+                code_fence = fence
+            elif stripped.startswith(code_fence):
+                in_code_block = False
+                code_fence = ""
+            result_lines.append(line)
+            i += 1
+            continue
+
+        # 代码块内部原样保留
+        if in_code_block:
+            result_lines.append(line)
+            i += 1
+            continue
+
+        # 检测 Setext 标题 (如: Title \n === 或 Subtitle \n ---)
+        if i + 1 < num_lines and stripped:
+            next_line = raw_lines[i + 1].strip()
+            # H1: ===
+            if re.match(r"^={3,}$", next_line) and not stripped.startswith("#"):
+                result_lines.append(f"# {stripped}")
+                i += 2
+                continue
+            # H2: --- (排除 frontmatter 边界，需前面有文本且不是列表项)
+            elif (
+                re.match(r"^-{3,}$", next_line)
+                and not stripped.startswith("#")
+                and not stripped.startswith("- ")
+                and not stripped.startswith("* ")
+            ):
+                result_lines.append(f"## {stripped}")
+                i += 2
+                continue
+
+        # 普通行直接保留
+        result_lines.append(line)
+        i += 1
+
+    return "\n".join(result_lines)
+
+
+# ---------------------------------------------------------------------------
 # Metadata & tag building
 # ---------------------------------------------------------------------------
+def compute_document_id(file_path: Path, input_root: Path, mirror: bool) -> str:
+    """
+    计算与 doc_service 仓库一致的确定性 document_id。
+    """
+    if mirror:
+        try:
+            relative = file_path.relative_to(input_root)
+        except ValueError:
+            relative = Path(file_path.name)
+    else:
+        relative = Path(file_path.name)
+
+    stem = str(relative.with_suffix(""))
+    doc_id = stem.replace("\\", "/").replace("/", "-").replace("_", "-")
+    doc_id = re.sub(r"-+", "-", doc_id).lower().strip("-")
+    return doc_id
+
+
 def extract_title(text: str, file_path: Path) -> str:
     """从文本提取标题：取第一行非空内容；如果为空则从文件名 slug 提取。"""
     for line in text.splitlines():
@@ -198,7 +295,6 @@ def extract_title(text: str, file_path: Path) -> str:
 
     # Fallback: 从文件名提取
     stem = file_path.stem
-    # 处理 dsid_xxx__slug 格式
     if "__" in stem:
         slug = stem.split("__", 1)[1]
     else:
@@ -230,9 +326,14 @@ def get_file_timestamp(file_path: Path) -> str:
 
 
 def build_metadata(
-    file_path: Path, text: str, config: Dict[str, Any], input_root: Path
+    file_path: Path,
+    text: str,
+    config: Dict[str, Any],
+    input_root: Path,
+    document_id: str,
+    file_type: str,
 ) -> Dict[str, Any]:
-    """构建 YAML frontmatter 元数据。"""
+    """构建标准 OKF YAML frontmatter 元数据。"""
     defaults = config.get("metadata", {}).get("defaults", {})
     tag_rules = config.get("tag_rules", [])
 
@@ -246,7 +347,9 @@ def build_metadata(
     else:
         created_at = created_at_setting
 
-    # Tags: 默认 + 规则匹配
+    updated_at = get_file_timestamp(file_path)
+
+    # Tags: 默认 + 规则匹配（仅用于向后兼容）
     default_tags = list(defaults.get("tags", []))
     rule_tags = apply_tag_rules(file_path, tag_rules)
     all_tags = default_tags + [t for t in rule_tags if t not in default_tags]
@@ -259,11 +362,14 @@ def build_metadata(
     source_path = str(relative_source).replace("\\", "/")
 
     metadata = {
+        "document_id": document_id,
         "title": title,
         "author": author,
         "created_at": created_at,
-        "tags": all_tags,
+        "updated_at": updated_at,
         "source_path": source_path,
+        "source_type": file_type,
+        "tags": all_tags,
     }
 
     return metadata
@@ -282,17 +388,22 @@ def generate_okf(text: str, metadata: Dict[str, Any]) -> str:
         sort_keys=False,
     ).strip()
 
-    # 构建 markdown body
     title = metadata.get("title", "")
     body = text.strip()
 
-    # 如果正文第一行就是标题（和 metadata 中的 title 相同），则加 # 前缀
+    # 处理正文头部标题，确保以 `# {title}` 开头且不重复
     lines = body.splitlines()
-    if lines and lines[0].strip() == title:
-        lines[0] = f"# {title}"
-        body = "\n".join(lines)
+    if lines:
+        first_line = lines[0].strip()
+        if first_line == title:
+            lines[0] = f"# {title}"
+            body = "\n".join(lines)
+        elif first_line == f"# {title}":
+            body = "\n".join(lines)
+        else:
+            body = f"# {title}\n\n{body}"
     else:
-        body = f"# {title}\n\n{body}"
+        body = f"# {title}\n"
 
     okf_content = f"---\n{frontmatter}\n---\n\n{body}\n"
     return okf_content
@@ -357,8 +468,17 @@ def convert_file(
             logger.warning("文件内容为空: %s", file_path)
             return False
 
+        # 如果是文本格式，进行结构标准化
+        if file_type == "text":
+            text = normalize_txt_structure(text)
+
+        # 计算 document_id
+        document_id = compute_document_id(file_path, input_root, mirror)
+
         # 构建元数据
-        metadata = build_metadata(file_path, text, config, input_root)
+        metadata = build_metadata(
+            file_path, text, config, input_root, document_id, file_type
+        )
 
         # 生成 OKF 内容
         okf_content = generate_okf(text, metadata)
@@ -437,11 +557,21 @@ def main():
         logger.error("输入路径不存在: %s", input_path)
         sys.exit(1)
 
-    # 确定输入根目录（用于计算相对路径）
-    if input_path.is_file():
-        input_root = input_path.parent
-    else:
-        input_root = input_path
+    # 确定输入根目录（用于计算相对路径并保持镜像结构）
+    # 如果指定了具体文件或子目录，优先找到所属的 documents 根目录（如 all_documents）以保留完整镜像层次
+    raw_root_candidates = ["all_documents", "raw_documents", "documents"]
+    input_root = None
+    for part_name in raw_root_candidates:
+        if part_name in input_path.parts:
+            idx = input_path.parts.index(part_name)
+            input_root = Path(*input_path.parts[: idx + 1])
+            break
+
+    if input_root is None:
+        if input_path.is_file():
+            input_root = input_path.parent
+        else:
+            input_root = input_path
 
     # 确定输出路径和是否镜像
     if args.output is not None:
