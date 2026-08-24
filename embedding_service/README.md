@@ -108,3 +108,25 @@ pytest tests/test_embedding_service.py tests/test_embedding_import.py -v
 4. 从本地 JSON 重新加载向量数据并验证维度。
 5. 使用代表性 Query 计算余弦相似度并打印 Top-K 召回结果与分值。
 
+---
+
+## 8. Retrieval Evaluation 检索效果评测
+
+本模块提供基于标准评测数据集的自动化检索质量评估工具：
+
+```bash
+# 运行默认检索评测（Top-5）
+python embedding_service/evaluate_retrieval.py
+
+# 指定评测数据集与 Top-K 截断
+python embedding_service/evaluate_retrieval.py --eval embedding_service/evaluation_queries.json --top-k 5
+```
+
+- **评测数据集**: [`evaluation_queries.json`](./evaluation_queries.json) (20 个高质量评测 Query，涵盖 direct_semantic、cross_document、specific_detail 与 hard_negative)
+- **评测报告与归因分析**: 参见详细报告文档 [`evaluation_report.md`](./evaluation_report.md)
+- **核心指标概览**:
+  - **Hit@1**: `0.6500` (13/20)
+  - **Hit@3**: `0.8000` (16/20)
+  - **Hit@5**: `0.8500` (17/20)
+  - **MRR**: `0.7258`
+

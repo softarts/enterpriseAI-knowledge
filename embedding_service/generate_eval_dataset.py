@@ -1,0 +1,380 @@
+"""
+Script to generate and validate evaluation_queries.json and evaluation_queries.md
+based on OKF documents in generated/ directory.
+"""
+
+import json
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from doc_service.repositories.okf_document_repository import OKFDocumentRepository
+
+OKF_DIR = PROJECT_ROOT / "generated"
+JSON_OUTPUT = PROJECT_ROOT / "embedding_service" / "evaluation_queries.json"
+MD_OUTPUT = PROJECT_ROOT / "embedding_service" / "evaluation_queries.md"
+
+queries_data = [
+    # =========================================================================
+    # Category A: Direct Semantic Queries (8)
+    # =========================================================================
+    {
+        "id": "Q001",
+        "query": "How does the organization recognize customer revenue and allocate transaction prices across deliverables?",
+        "category": "direct_semantic",
+        "expected_document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+        "expected_source_path": "confluence/finance-and-legal/dsid_135ae39cdcd342e5b9c65190c87dd6ae__procurement-contracts-and-revrec-playbook-2025.txt",
+        "expected_heading": "Revenue Recognition and Billing Policies",
+        "reason": "Tests natural semantic retrieval for revenue recognition governance and ASC 606 obligation allocation principles without using exact accounting boilerplate in the query.",
+        "difficulty": "medium",
+    },
+    {
+        "id": "Q002",
+        "query": "What criteria and scoring dimensions are used to evaluate operational runbooks during simulated recovery game days?",
+        "category": "direct_semantic",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_95aaab5e5a6640ffaceadee4bcdb5f76__runbook-retention-and-responder-onboarding-handbook-2026.txt",
+        "expected_heading": "Game Day Integration and Scoring Rubric:",
+        "reason": "Tests retrieval for game day drills and the 80+ point scoring rubric covering readability, execution clarity, instrumentation, evidence collection, and stabilization time.",
+        "difficulty": "easy",
+    },
+    {
+        "id": "Q003",
+        "query": "What mandatory metadata attributes must be emitted on request spans to comply with telemetry observability guarantees?",
+        "category": "direct_semantic",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_b6c9e2f26e644b15b5be1eed43ed7149__tiered-priority-commitments-and-telemetry-stability-standard-2026.txt",
+        "expected_heading": "Operational behaviors (detailed):",
+        "reason": "Tests retrieval for span instrumentation requirements (rw.priority, rw.client_tier, rw.request_nonce, rw.model_variant) based on telemetry emission semantics.",
+        "difficulty": "medium",
+    },
+    {
+        "id": "Q004",
+        "query": "What is the end-to-end nomination, calibration, and timeline workflow for employee promotions and role transitions?",
+        "category": "direct_semantic",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_2588273815bf4475a35ea5c78f246fa2__cross-functional-onboarding-and-career-support-compass-2026.txt",
+        "expected_heading": "Role transition and promotion process (summary):",
+        "reason": "Tests direct semantic retrieval for the 4-step promotion process (Nomination, Calibration, Business & Comp review, Decision) and required packet artifacts.",
+        "difficulty": "medium",
+    },
+    {
+        "id": "Q005",
+        "query": "What mandatory fields and digital signature components must be included in a compliance evidence bundle manifest?",
+        "category": "direct_semantic",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_fe4f3a98cd9642afa7f9a150de313c5c__authn-audit-evidence-correlation-playbook-2028.txt",
+        "expected_heading": "Evidence bundle manifest (fields)",
+        "reason": "Tests semantic matching against compliance packaging specifications including evidence ID, time window, tenant list, KMS signing key, and retention policy tag.",
+        "difficulty": "easy",
+    },
+    {
+        "id": "Q006",
+        "query": "What are the core operational components and timelines for mentors and buddies supporting new team members?",
+        "category": "direct_semantic",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_7656c7c6a6ce4c3baa88c3a7cfb5d658__navigator-program-career-ops-and-tooling-2026.txt",
+        "expected_heading": "4) Mentorship, Sponsorship & Buddy System",
+        "reason": "Tests retrieval for peer mentorship structures (1:6 mentor-to-mentee ratio, 6 sessions over 3 months, preboarding buddy assignment, and senior leader sponsorship).",
+        "difficulty": "medium",
+    },
+    {
+        "id": "Q007",
+        "query": "What target time-to-offer SLA is expected from requisition opening for individual contributor candidate hiring?",
+        "category": "direct_semantic",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_951c6983787c4be28703bbb5b5e5edd9__talent-deep-dive-lifecycle-and-benchmarks-2025.txt",
+        "expected_heading": "Hiring and interview SLAs (operational targets)",
+        "reason": "Tests retrieval of hiring benchmark metrics (28 days target time-to-offer from req open for most IC hires) in the talent lifecycle benchmark document.",
+        "difficulty": "medium",
+    },
+    {
+        "id": "Q008",
+        "query": "What continuous learning stipends, wellness allowances, and retirement benefits are provided to employees?",
+        "category": "direct_semantic",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_4b1d1d26a4d64f3c9f0702e7b1d2d3ef__scaled-onboarding-first-90-to-1000-playbook-2028.txt",
+        "expected_heading": "Benefits & Perks Quick Orientation (2028)",
+        "reason": "Tests retrieval of employee total rewards benefits, 401(k) match, wellness reimbursement, and annual professional development stipend.",
+        "difficulty": "easy",
+    },
+    # =========================================================================
+    # Category B: Cross-document / Similar-topic Queries (6)
+    # =========================================================================
+    {
+        "id": "Q009",
+        "query": "How are newly assigned on-call engineers trained, shadowed, and certified before handling emergency production incidents independently?",
+        "category": "cross_document",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_95aaab5e5a6640ffaceadee4bcdb5f76__runbook-retention-and-responder-onboarding-handbook-2026.txt",
+        "expected_heading": "Responder Onboarding Checklist (for new on-call engineer):",
+        "reason": "Multiple documents discuss onboarding new team members (4b1d1d26, 25882738), but only 95aaab5e specifies on-call responder milestones (orientation, shadowing shifts, supervised incident runs, game day certification).",
+        "difficulty": "hard",
+    },
+    {
+        "id": "Q010",
+        "query": "How does the short-term micro-rotation assignment process operate for employees wishing to explore adjacent roles for a few weeks?",
+        "category": "cross_document",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_7656c7c6a6ce4c3baa88c3a7cfb5d658__navigator-program-career-ops-and-tooling-2026.txt",
+        "expected_heading": "3) Micro-rotation and Short-term Assignment Process",
+        "reason": "Distinguishes temporary 4-12 week micro-rotations with preserved primary roles (Navigator program) from permanent internal transfers requiring 6-month tenure (talent deep dive).",
+        "difficulty": "hard",
+    },
+    {
+        "id": "Q011",
+        "query": "What are the quantitative velocity targets and median benchmarks for provisioning access and merging a first pull request?",
+        "category": "cross_document",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_951c6983787c4be28703bbb5b5e5edd9__talent-deep-dive-lifecycle-and-benchmarks-2025.txt",
+        "expected_heading": "Metrics and quality gates (people-ops KPIs)",
+        "reason": "Both 4b1d1d26 and 951c6983 discuss onboarding progression, but 951c6983 specifically contains the measured KPI benchmarks (median < 48 hours time-to-provision, 7 days time-to-first-PR, >=92% 90-day retention).",
+        "difficulty": "hard",
+    },
+    {
+        "id": "Q012",
+        "query": "What are the review frequencies, expiration policies, and retirement rules for operational service documentation?",
+        "category": "cross_document",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_95aaab5e5a6640ffaceadee4bcdb5f76__runbook-retention-and-responder-onboarding-handbook-2026.txt",
+        "expected_heading": "Runbook Review Cadence and Lifecycle:",
+        "reason": "Distinguishes operational runbook review lifecycle (quarterly for critical, 18-month deprecation) from compliance log retention policies (fe4f3a98) and contract storage retention (135ae39c).",
+        "difficulty": "medium",
+    },
+    {
+        "id": "Q013",
+        "query": "What permissions and systems access are provisioned for new engineers across source control, cloud infrastructure, and identity providers?",
+        "category": "cross_document",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_4b1d1d26a4d64f3c9f0702e7b1d2d3ef__scaled-onboarding-first-90-to-1000-playbook-2028.txt",
+        "expected_heading": "Internal Tools Access Matrix (essential items)",
+        "reason": "Tests retrieval of developer tooling provisioning (Okta, GitHub, AWS staging, Jira, 1Password) against general systems mentions in other documents.",
+        "difficulty": "medium",
+    },
+    {
+        "id": "Q014",
+        "query": "What governance stages and legal redline guardrails regulate commercial vendor contracts before execution?",
+        "category": "cross_document",
+        "expected_document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+        "expected_source_path": "confluence/finance-and-legal/dsid_135ae39cdcd342e5b9c65190c87dd6ae__procurement-contracts-and-revrec-playbook-2025.txt",
+        "expected_heading": "Contract Lifecycle Management (CLM)",
+        "reason": "Focuses on commercial contract lifecycle stages and legal redline constraints, contrasting with technical SDLC deployment controls (fe4f3a98).",
+        "difficulty": "medium",
+    },
+    # =========================================================================
+    # Category C: Specific Detail Queries (3)
+    # =========================================================================
+    {
+        "id": "Q015",
+        "query": "What is the maximum dollar limit and retroactive approval window for emergency vendor spend during critical outages?",
+        "category": "specific_detail",
+        "expected_document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+        "expected_source_path": "confluence/finance-and-legal/dsid_135ae39cdcd342e5b9c65190c87dd6ae__procurement-contracts-and-revrec-playbook-2025.txt",
+        "expected_heading": "Procurement Procedures",
+        "reason": "Pinpoints the exact $100k emergency procurement ceiling and 48-hour retroactive Finance sign-off requirement.",
+        "difficulty": "easy",
+    },
+    {
+        "id": "Q016",
+        "query": "What is the maximum allowed number of priority classes a service can configure in its declared telemetry budget?",
+        "category": "specific_detail",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_b6c9e2f26e644b15b5be1eed43ed7149__tiered-priority-commitments-and-telemetry-stability-standard-2026.txt",
+        "expected_heading": "Standard requirements (high-level):",
+        "reason": "Pinpoints the specific rule stating services may declare a maximum of 5 priority buckets within their fidelity budget.",
+        "difficulty": "easy",
+    },
+    {
+        "id": "Q017",
+        "query": "What target Mean Time to Evidence is required when assembling audit packages for high-priority security investigations?",
+        "category": "specific_detail",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_fe4f3a98cd9642afa7f9a150de313c5c__authn-audit-evidence-correlation-playbook-2028.txt",
+        "expected_heading": "Metrics and KPIs",
+        "reason": "Pinpoints the MTTE KPI metric of <= 4 hours and >= 98% evidence completeness target for audit packages.",
+        "difficulty": "easy",
+    },
+    # =========================================================================
+    # Category D: Hard Negative Queries (3)
+    # =========================================================================
+    {
+        "id": "Q018",
+        "query": "Who must approve formal policy exceptions and deviations when a team cannot meet standard data log storage durations?",
+        "category": "hard_negative",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_fe4f3a98cd9642afa7f9a150de313c5c__authn-audit-evidence-correlation-playbook-2028.txt",
+        "expected_heading": "Risk exceptions and approval workflow",
+        "reason": "Uses general compliance terms like 'approval', 'exceptions', and 'policy' that abound in the finance procurement matrix (135ae39c), but specifically seeks the security audit retention exception path (Requestor -> Security -> Compliance -> Risk committee).",
+        "difficulty": "hard",
+    },
+    {
+        "id": "Q019",
+        "query": "What HTTP header carries the unique request tracking identifier for joining authentication decisions with backend access logs?",
+        "category": "hard_negative",
+        "expected_document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+        "expected_source_path": "confluence/people-ops/onboarding/dsid_fe4f3a98cd9642afa7f9a150de313c5c__authn-audit-evidence-correlation-playbook-2028.txt",
+        "expected_heading": "Technical controls and requirements",
+        "reason": "Strongly resembles the telemetry priority tracking standard (X-RW-Priority, X-RW-Client-Tier in b6c9e2f2), but specifically targets X-RW-REQ-ID required for authN/authZ audit correlation.",
+        "difficulty": "hard",
+    },
+    {
+        "id": "Q020",
+        "query": "Which executive roles must authorize multi-year commitments or SaaS contracts exceeding quarter-million dollar thresholds?",
+        "category": "hard_negative",
+        "expected_document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+        "expected_source_path": "confluence/finance-and-legal/dsid_135ae39cdcd342e5b9c65190c87dd6ae__procurement-contracts-and-revrec-playbook-2025.txt",
+        "expected_heading": "Approval Matrix (illustrative)",
+        "reason": "Uses keywords 'commitments', 'thresholds', and 'tiers' that are heavily present in the telemetry priority commitment standard (b6c9e2f2), but tests retrieval of the CFO + General Counsel spend approval requirement for contracts > $250k.",
+        "difficulty": "hard",
+    },
+]
+
+
+def validate_and_save():
+    repo = OKFDocumentRepository(okf_dir=OKF_DIR)
+    files = list(OKF_DIR.rglob("*.yaml")) + list(OKF_DIR.rglob("*.yml"))
+    doc_map = {}
+    for fp in files:
+        rec = repo._parse_okf_file(fp)
+        if rec:
+            doc_map[rec.document_id] = {
+                "source_path": rec.source_path,
+                "content": rec.content,
+                "title": rec.title,
+                "file": fp,
+            }
+
+    print(f"Total OKF documents loaded: {len(doc_map)}")
+
+    # Validation checks
+    valid_categories = {"direct_semantic", "cross_document", "specific_detail", "hard_negative"}
+    valid_difficulties = {"easy", "medium", "hard"}
+
+    errors = []
+    ids_seen = set()
+    queries_seen = set()
+
+    if len(queries_data) != 20:
+        errors.append(f"Expected 20 queries, found {len(queries_data)}")
+
+    for q in queries_data:
+        qid = q["id"]
+        if qid in ids_seen:
+            errors.append(f"Duplicate ID: {qid}")
+        ids_seen.add(qid)
+
+        qtext = q["query"]
+        if qtext in queries_seen:
+            errors.append(f"Duplicate Query: {qtext}")
+        queries_seen.add(qtext)
+
+        if q["category"] not in valid_categories:
+            errors.append(f"{qid}: Invalid category '{q['category']}'")
+
+        if q["difficulty"] not in valid_difficulties:
+            errors.append(f"{qid}: Invalid difficulty '{q['difficulty']}'")
+
+        doc_id = q["expected_document_id"]
+        if doc_id not in doc_map:
+            errors.append(f"{qid}: expected_document_id '{doc_id}' not found in generated OKF files")
+            continue
+
+        doc = doc_map[doc_id]
+        if q["expected_source_path"] != doc["source_path"]:
+            errors.append(
+                f"{qid}: expected_source_path '{q['expected_source_path']}' does not match doc metadata '{doc['source_path']}'"
+            )
+
+        if q["expected_heading"] not in doc["content"]:
+            errors.append(
+                f"{qid}: expected_heading '{q['expected_heading']}' not found in content of {doc_id}"
+            )
+
+        if "acceptable_documents" in q:
+            for acc in q["acceptable_documents"]:
+                acc_id = acc["document_id"]
+                if acc_id not in doc_map:
+                    errors.append(f"{qid}: acceptable doc_id '{acc_id}' not found")
+                elif acc["heading"] not in doc_map[acc_id]["content"]:
+                    errors.append(
+                        f"{qid}: acceptable heading '{acc['heading']}' not found in {acc_id}"
+                    )
+
+    if errors:
+        print("Validation Failed:")
+        for err in errors:
+            print(f"  - {err}")
+        return False
+
+    print("Validation passed successfully! All 20 queries are valid.")
+
+    # Write JSON output
+    json_obj = {
+        "version": "1.0",
+        "description": "Embedding retrieval evaluation queries generated from OKF documents",
+        "query_count": len(queries_data),
+        "queries": queries_data,
+    }
+    with open(JSON_OUTPUT, "w", encoding="utf-8") as f:
+        json.dump(json_obj, f, indent=2, ensure_ascii=False)
+    print(f"Saved JSON dataset to: {JSON_OUTPUT}")
+
+    # Write Markdown output
+    md_lines = [
+        "# Embedding Retrieval Evaluation Queries",
+        "",
+        "> Ground-truth query evaluation dataset generated strictly from `generated/` OKF documents.",
+        "",
+        f"- **Version**: 1.0",
+        f"- **Query Count**: {len(queries_data)}",
+        f"- **Unique Documents Covered**: {len(set(q['expected_document_id'] for q in queries_data))}",
+        "",
+        "---",
+        "",
+    ]
+
+    for q in queries_data:
+        md_lines.extend([
+            f"## {q['id']}",
+            "",
+            "Query:",
+            q["query"],
+            "",
+            "Category:",
+            q["category"],
+            "",
+            "Expected Document:",
+            q["expected_document_id"],
+            "",
+            "Expected Source:",
+            q["expected_source_path"],
+            "",
+            "Expected Heading:",
+            q["expected_heading"],
+            "",
+            "Difficulty:",
+            q["difficulty"],
+            "",
+            "Reason:",
+            q["reason"],
+            "",
+        ])
+        if "acceptable_documents" in q:
+            md_lines.append("Acceptable Documents:")
+            for acc in q["acceptable_documents"]:
+                md_lines.append(f"- Document: `{acc['document_id']}`, Heading: `{acc['heading']}`")
+            md_lines.append("")
+        md_lines.append("---")
+        md_lines.append("")
+
+    with open(MD_OUTPUT, "w", encoding="utf-8") as f:
+        f.write("\n".join(md_lines))
+    print(f"Saved Markdown report to: {MD_OUTPUT}")
+    return True
+
+
+if __name__ == "__main__":
+    validate_and_save()
