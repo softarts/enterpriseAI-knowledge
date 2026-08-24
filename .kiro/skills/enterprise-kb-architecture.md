@@ -25,15 +25,16 @@ The canonical architecture document is:
 
 ## Current Implementation Status
 
-### Completed (Layer 1 & 2)
+### Completed (Layer 1, 2, 3)
 - `import_raw_doc_to_okf.py`: Raw document → OKF conversion (PDF, DOCX, HTML, TXT)
 - `doc_to_okf_config.yaml`: Configuration for document ingestion
 - `generated/`: OKF output directory (YAML frontmatter + Markdown body, `.yaml` extension)
-- Metadata fields: title, author, created_at, tags, source_path
+- `embedding_service/`: OKF → Chunks → Local Embeddings → `embedding/` persistence (mirrored JSONs)
+  - `main_import.py`: Batch OKF importer (input is `generated/`, raw document direct reading is prohibited)
+  - Metadata fields: title, author, created_at, tags, source_path, document_id, chunk_id
 
-### Not Yet Implemented
-- Layer 3: Vectorization (Chunking, Embedding, FAISS)
-- Layer 4: Retrieval / RAG
+### In Progress / Next Phases
+- Layer 4: Retrieval / RAG (Hybrid search, reranking)
 - Layer 5: FastAPI API Service
 - Layer 6: MCP Server
 - Layer 7: Kiro Agent integration

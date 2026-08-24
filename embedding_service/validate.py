@@ -51,22 +51,31 @@ def run_validation():
     persisted_chunks = service.embed_and_persist_all()
     print(f"    -> Generated and saved {len(persisted_chunks)} embeddings.")
 
-    # Check created files
-    saved_files = list(embedding_dir.rglob("*.json"))
-    print(f"    -> Persisted files count: {len(saved_files)}")
-    for f in saved_files:
-        print(f"       - {f.relative_to(PROJECT_ROOT)}")
+    # Check created files for OKF documents
+    docs = service.repo.list_documents()
+    persisted_files = [
+        service.get_embedding_path_for_okf(Path(doc.file_path) if doc.file_path else okf_dir / f"{doc.document_id}.yaml")
+        for doc in docs
+    ]
+    print(f"    -> OKF Persisted files count: {len(persisted_files)}")
+    for f in persisted_files:
+        if f.exists():
+            print(f"       - {f.relative_to(PROJECT_ROOT)}")
 
     # Step 5: Reload from local files
     print("\n[4] Reloading embeddings from disk...")
-    reloaded_chunks = service.load_all_persisted_embeddings()
-    print(f"    -> Successfully reloaded {len(reloaded_chunks)} embedded chunks from {embedding_dir}.")
+    reloaded_chunks = service.load_embeddings_for_okf_docs()
+    print(f"    -> Successfully reloaded {len(reloaded_chunks)} embedded chunks for OKF documents.")
 
     assert len(reloaded_chunks) == len(persisted_chunks), "Mismatch between saved and reloaded chunks count!"
     if reloaded_chunks:
         first = reloaded_chunks[0]
         print(f"       Sample chunk verification: chunk_id={first.chunk_id}, embedding_dim={len(first.embedding)}")
         assert len(first.embedding) == embedder.dimension, f"Expected dim {embedder.dimension}, got {len(first.embedding)}"
+
+    # Also load all persisted embeddings from storage
+    all_chunks = service.load_all_persisted_embeddings()
+    print(f"    -> Total embedded chunks available in storage: {len(all_chunks)} across all indexed files.")
 
     # Step 6 & 7: Test Queries & Cosine Similarity Search
     test_queries = [
@@ -82,7 +91,7 @@ def run_validation():
         print("-" * 60)
 
         query_vec = embedder.embed_query(query)
-        results = search_by_similarity(query_vec, reloaded_chunks, top_k=3)
+        results = search_by_similarity(query_vec, all_chunks if all_chunks else reloaded_chunks, top_k=3)
 
         if not results:
             print("  No matching chunks found.")

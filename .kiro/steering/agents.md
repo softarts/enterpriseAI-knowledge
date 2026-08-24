@@ -83,6 +83,15 @@ All raw document ingestion pipelines (including OKF conversion and Embedding gen
 4. **Deterministic Document ID**:
    - `document_id` computation MUST follow the canonical rule: replace path separators/underscores with `-`, lowercase, strip leading/trailing hyphens, and collapse consecutive hyphens.
 
+## Rule: Embedding Service Consumes OKF Only
+
+- `embedding_service` (including `main_import.py`, `service.py`, `validate.py`) is an OKF-downstream consumer.
+- The input to `embedding_service` MUST always be generated OKF documents (`.yaml` files under `generated/`).
+- `main_import.py` is strictly prohibited from directly parsing or reading raw documents (TXT/PDF/DOCX/HTML).
+- Raw document conversion is exclusively handled upstream by `import_raw_doc_to_okf.py`.
+- Metadata fields (`source_path`, `document_id`, `title`, etc.) MUST be inherited directly from OKF frontmatter and NEVER re-derived from raw files.
+- The destination `embedding/` directory mirrors the `generated/` subfolder hierarchy (e.g. `generated/confluence/.../xxx.yaml` -> `embedding/confluence/.../xxx.json`).
+
 ## Available Skills
 
 The following skills can be loaded for detailed implementation guidance:

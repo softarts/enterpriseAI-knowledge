@@ -69,19 +69,22 @@ OKF 文档 → Chunk → Embedding 生成 → 本地 JSON 镜像持久化 → �
 
 ---
 
-## 6. 批量导入原始文档 (Batch Import)
+## 6. 批量从 OKF 文档导入 (OKF Batch Import)
 
-使用 `main_import.py` 直接将原始 TXT/Markdown/PDF/DOCX/HTML 等文档批量切块并生成 Embeddings 保存到 `embedding/` 镜像目录：
+使用 `main_import.py` 从 `generated/` 目录下的 OKF 文档批量读取并切块，生成 Embeddings 保存到 `embedding/` 镜像目录：
 
 ```bash
-# 1. 批量导入某一个子目录下的所有文档（保持镜像层级）
-python embedding_service/main_import.py --input all_documents/confluence/people-ops
+# 1. 默认批量导入 generated/ 下的所有 OKF 文档（保持镜像层级）
+python embedding_service/main_import.py
 
-# 2. 导入单个文档（自动剥离 all_documents 根前缀，保持镜像层级）
-python embedding_service/main_import.py --input all_documents/confluence/people-ops/onboarding/dsid_4b1d1d26a4d64f3c9f0702e7b1d2d3ef__scaled-onboarding-first-90-to-1000-playbook-2028.txt
+# 2. 导入某个子目录下的 OKF 文档
+python embedding_service/main_import.py --input generated/confluence/people-ops
 
-# 3. 指定自定义输出目录（不进行镜像推导，直接输出到指定目录）
-python embedding_service/main_import.py --input all_documents/confluence/people-ops/onboarding/xxx.txt --output custom_embedding/
+# 3. 导入单个 OKF 文件
+python embedding_service/main_import.py --input generated/confluence/people-ops/onboarding/dsid_4b1d1d26a4d64f3c9f0702e7b1d2d3ef__scaled-onboarding-first-90-to-1000-playbook-2028.yaml
+
+# 4. 指定自定义输出目录
+python embedding_service/main_import.py --input generated/confluence/people-ops/onboarding/xxx.yaml --output custom_embedding/
 ```
 
 ---

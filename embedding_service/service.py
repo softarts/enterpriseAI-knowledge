@@ -107,49 +107,32 @@ class EmbeddingService:
 
         return all_embedded_chunks
 
-    def embed_and_persist_raw_file(
+    def embed_and_persist_okf_file(
         self,
         file_path: Path,
-        input_root: Path,
+        input_root: Optional[Path] = None,
         output_dir: Optional[Path] = None,
         mirror: bool = True,
     ) -> List[EmbeddedChunk]:
         """
-        Embed and persist a single raw document directly.
+        Embed and persist a single OKF document file.
         """
-        from embedding_service.main_import import (
-            compute_document_id,
-            compute_output_path,
-            compute_relative_source_path,
-        )
-        from import_raw_doc_to_okf import (
-            detect_file_type,
-            extract_text,
-            extract_title,
-            normalize_txt_structure,
-        )
-
+        in_root = input_root or self.okf_dir
         out_dir = output_dir or self.embedding_dir
-        file_type = detect_file_type(file_path)
-        if not file_type:
+
+        if file_path.suffix.lower() not in [".yaml", ".yml"]:
             return []
 
-        text = extract_text(file_path, file_type)
-        if not text.strip():
+        repo = OKFDocumentRepository(okf_dir=in_root)
+        record = repo._parse_okf_file(file_path)
+        if not record:
             return []
-
-        if file_type == "text":
-            text = normalize_txt_structure(text)
-
-        title = extract_title(text, file_path)
-        document_id = compute_document_id(file_path, input_root, mirror)
-        source_path = compute_relative_source_path(file_path, input_root)
 
         chunks = chunk_document(
-            document_id=document_id,
-            title=title,
-            content=text,
-            source_path=source_path,
+            document_id=record.document_id,
+            title=record.title,
+            content=record.content,
+            source_path=record.source_path,
         )
         if not chunks:
             return []
@@ -174,9 +157,36 @@ class EmbeddingService:
                 )
             )
 
-        dest_json_path = compute_output_path(file_path, input_root, out_dir, mirror)
+        if mirror:
+            try:
+                relative = file_path.relative_to(in_root)
+            except ValueError:
+                relative = Path(file_path.name)
+            dest_json_path = (out_dir / relative).with_suffix(".json")
+        else:
+            dest_json_path = out_dir / f"{file_path.stem}.json"
+
         save_embeddings_to_json(embedded_chunks, dest_json_path)
         return embedded_chunks
+
+    def load_embeddings_from_file(self, file_path: Path) -> List[EmbeddedChunk]:
+        """
+        Load embedded chunks from a specific JSON file.
+        """
+        return load_embeddings_from_json(file_path)
+
+    def load_embeddings_for_okf_docs(self) -> List[EmbeddedChunk]:
+        """
+        Load embedded chunks corresponding to all OKF documents in okf_dir.
+        """
+        docs = self.repo.list_documents()
+        chunks: List[EmbeddedChunk] = []
+        for doc in docs:
+            doc_file_path = Path(doc.file_path) if doc.file_path else self.okf_dir / f"{doc.document_id}.yaml"
+            embedding_file_path = self.get_embedding_path_for_okf(doc_file_path)
+            if embedding_file_path.exists():
+                chunks.extend(load_embeddings_from_json(embedding_file_path))
+        return chunks
 
     def load_all_persisted_embeddings(self) -> List[EmbeddedChunk]:
         """
