@@ -288,35 +288,3 @@ Collection: okf_chunks  (count=43, space=cosine)
 | `.kiro/skills/enterprise-knowledge.md` | 约束“必须通过 MCP 查询”的技能 |
 | `.kiro/settings/mcp.json` | Kiro 侧的 MCP 服务器连接配置 |
 
-
-==
-Chroma 第一阶段集成已完成并实测通过。
-
-完成内容
-新增 vector_service/ 包
-
-chroma_store.py — ChromaStore：add_embedded_chunks(以 chunk_id 幂等 upsert)、query(Top-K 最近邻)、stats。不自己编码文本(调用方传向量),便于将来 MCP 复用。
-cli.py — python -m vector_service.cli search "..." [--top-k N] 和 stats。
-config.py — vector_db/、collection okf_chunks、cosine、默认 Top-K=5。
-修改 
-main_import.py
-
-新增 --vector-db(默认关)与 --vector-db-dir。默认行为完全不变:仍写 embedding/*.json,且只有加开关时才 import chromadb、写 vector_db/。
-其它
-
-requirements.txt 加 chromadb>=1.5.0(实际安装 1.5.9);.gitignore 加 vector_db/。
-
-agents.md
- 固化“每个完成的 task 必须写 task summary”规则。
-
-2026-08-26-chroma-vector-db-phase1.md
- 记录实现/测试/限制。
-README.md 新增“Chroma / Vector DB”章节:写入与查询示例、对应代码文件+行号、以及与现有风格一致的流程图。
-实测结果
-导入:python embedding_service/main_import.py --vector-db → 8 文件成功,collection okf_chunks 写入 43 条。
-stats → count=43, cosine, dim=384。
-search "...compliance evidence bundle?" --top-k 3 → Top-1 distance 0.4110(chunk-014,"Acceptance criteria for compliance reviewers"),与之前内存检索的相似度 0.589 吻合(distance ≈ 1 − score),顺序一致。
-约束遵守
-本阶段只验证 Embedding → Chroma → Vector Search;未引入 BM25/reranker/hybrid/LLM/context assembly,未改动现有 MCP。ChromaStore 已解耦,为未来“MCP 查询 Chroma”预留了复用点。
-
-一点说明:heading 为空时因 Chroma 元数据不接受 None,写入时转为 ""、读出时再转回 None;删除 generated/ 中的 chunk 不会自动从 Chroma 移除(第一阶段无对账/删除逻辑),这些都记在了 task summary 的“已知限制”里。
