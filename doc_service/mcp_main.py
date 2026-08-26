@@ -16,6 +16,8 @@ Environment Variables:
 
 import asyncio
 import logging
+import socket
+import sys
 
 import uvicorn
 
@@ -27,6 +29,47 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    """Return True if a TCP port is already bound on the given host."""
+    # 0.0.0.0 is not connectable on Windows; probe loopback for the check.
+    probe_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((probe_host, port)) == 0
+
+
+def _preflight_ports() -> None:
+    """
+    Fail fast with an actionable message if either port is already bound.
+
+    Without this, uvicorn raises a long, opaque traceback via asyncio.gather
+    when a server instance is already running on the same port.
+    """
+    conflicts = []
+    if _port_in_use(settings.host, settings.port):
+        conflicts.append(("REST API", settings.port, "KB_PORT"))
+    if _port_in_use(settings.host, settings.mcp_port):
+        conflicts.append(("MCP Server", settings.mcp_port, "KB_MCP_PORT"))
+
+    if conflicts:
+        logger.error("=" * 60)
+        logger.error("Startup aborted: port(s) already in use.")
+        for name, port, env_var in conflicts:
+            logger.error(
+                "  %s port %d is busy. A server may already be running, or set %s "
+                "to a free port.",
+                name,
+                port,
+                env_var,
+            )
+        logger.error(
+            "If the enterprise-kb server is already running, no action is needed — "
+            "use the MCP tools against the existing instance."
+        )
+        logger.error("=" * 60)
+        sys.exit(1)
 
 
 async def start_rest_api() -> None:
@@ -69,6 +112,8 @@ async def main() -> None:
     logger.info("MCP Server: http://%s:%d/mcp", settings.host, settings.mcp_port)
     logger.info("OKF Directory: %s", settings.okf_dir)
     logger.info("=" * 60)
+
+    _preflight_ports()
 
     await asyncio.gather(
         start_rest_api(),

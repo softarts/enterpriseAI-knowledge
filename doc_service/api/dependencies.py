@@ -9,28 +9,66 @@ from typing import Optional
 
 from doc_service.core.config import settings
 from doc_service.repositories.okf_document_repository import OKFDocumentRepository
+from doc_service.retrieval.embedding_retriever import EmbeddingRetriever
 from doc_service.retrieval.keyword_retriever import KeywordRetriever
 from doc_service.services.knowledge_service import KnowledgeService
 
 _service_instance: Optional[KnowledgeService] = None
+_embedding_service_instance: Optional[KnowledgeService] = None
+_shared_repository: Optional[OKFDocumentRepository] = None
+
+
+def _get_repository() -> OKFDocumentRepository:
+    """Lazily create and cache a shared OKF repository instance."""
+    global _shared_repository
+    if _shared_repository is None:
+        _shared_repository = OKFDocumentRepository()
+    return _shared_repository
 
 
 def get_knowledge_service() -> KnowledgeService:
     """
-    Lazily create and cache the KnowledgeService singleton.
+    Lazily create and cache the default (keyword-backed) KnowledgeService singleton.
 
     Wires together:
       OKFDocumentRepository -> KeywordRetriever -> KnowledgeService
+
+    This backs the existing REST /search and the MCP `query_documents` tool.
     """
     global _service_instance
     if _service_instance is None:
-        repository = OKFDocumentRepository()
+        repository = _get_repository()
         retriever = KeywordRetriever(repository=repository)
         _service_instance = KnowledgeService(repository=repository, retriever=retriever)
     return _service_instance
 
 
+def get_embedding_knowledge_service() -> KnowledgeService:
+    """
+    Lazily create and cache an embedding-backed KnowledgeService singleton.
+
+    Wires together:
+      OKFDocumentRepository -> EmbeddingRetriever -> KnowledgeService
+
+    This backs the MCP `search_knowledge` tool. It shares the same repository
+    (for document-level access) but swaps the retrieval backend to SBERT vector
+    similarity. The retriever is chosen behind the same `Retriever` protocol, so
+    a future ChromaRetriever can replace EmbeddingRetriever here without any
+    change to the service or MCP tools.
+    """
+    global _embedding_service_instance
+    if _embedding_service_instance is None:
+        repository = _get_repository()
+        retriever = EmbeddingRetriever()
+        _embedding_service_instance = KnowledgeService(
+            repository=repository, retriever=retriever
+        )
+    return _embedding_service_instance
+
+
 def reset_service() -> None:
-    """Reset the cached service instance. Used in tests."""
-    global _service_instance
+    """Reset the cached service instances. Used in tests."""
+    global _service_instance, _embedding_service_instance, _shared_repository
     _service_instance = None
+    _embedding_service_instance = None
+    _shared_repository = None

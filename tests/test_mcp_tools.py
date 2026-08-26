@@ -30,10 +30,15 @@ async def mcp_client(set_test_okf_dir):
 
 @pytest.mark.asyncio
 async def test_list_tools(mcp_client):
-    """MCP server exposes exactly three tools."""
+    """MCP server exposes exactly four tools."""
     result = await mcp_client.list_tools()
     tool_names = sorted(t.name for t in result.tools)
-    assert tool_names == ["get_document", "list_documents", "query_documents"]
+    assert tool_names == [
+        "get_document",
+        "list_documents",
+        "query_documents",
+        "search_knowledge",
+    ]
 
 
 @pytest.mark.asyncio
@@ -116,6 +121,53 @@ async def test_query_documents_respects_top_k(mcp_client):
     """query_documents respects the top_k parameter."""
     result = await mcp_client.call_tool(
         "query_documents", {"query": "policy", "top_k": 2}
+    )
+    data = json.loads(result.content[0].text)
+    assert len(data["results"]) <= 2
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_shape(mcp_client):
+    """
+    search_knowledge returns embedding-backed context with the required shape.
+
+    It reads from the project's persisted `embedding/` directory (SBERT vectors),
+    which is independent of the OKF fixtures. We assert the response envelope and,
+    when results exist, the per-result field contract (rank, score, text, etc.).
+    """
+    result = await mcp_client.call_tool(
+        "search_knowledge", {"query": "compliance evidence bundle", "top_k": 3}
+    )
+    assert not result.is_error
+
+    data = json.loads(result.content[0].text)
+    assert data["query"] == "compliance evidence bundle"
+    assert data["top_k"] == 3
+    assert "results" in data
+    assert isinstance(data["results"], list)
+    assert len(data["results"]) <= 3
+
+    # Ranks must be contiguous and 1-indexed in relevance order.
+    for expected_rank, item in enumerate(data["results"], start=1):
+        assert item["rank"] == expected_rank
+        for field in (
+            "rank",
+            "score",
+            "document_id",
+            "heading",
+            "chunk_id",
+            "title",
+            "source_path",
+            "text",
+        ):
+            assert field in item
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_respects_top_k(mcp_client):
+    """search_knowledge never returns more than top_k results."""
+    result = await mcp_client.call_tool(
+        "search_knowledge", {"query": "policy", "top_k": 2}
     )
     data = json.loads(result.content[0].text)
     assert len(data["results"]) <= 2

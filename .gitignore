@@ -4,3 +4,7 @@ enterpriseag-bench_all_documents/
 enterpriserag-bench_all_documents/**
 all_documents/
 
+
+# Chroma persistent vector store
+vector_db/
+.__tmp_chroma_probe/

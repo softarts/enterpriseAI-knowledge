@@ -96,6 +96,7 @@ def process_okf_document(
     output_dir: Path,
     embedder: LocalEmbedder,
     mirror: bool = True,
+    vector_store: Optional["object"] = None,
 ) -> bool:
     """
     Parse an OKF document, generate chunks, compute embeddings, and save to JSON.
@@ -151,6 +152,12 @@ def process_okf_document(
         dest_json_path = compute_output_path(file_path, input_root, output_dir, mirror)
         save_embeddings_to_json(embedded_chunks, dest_json_path)
         logger.info("Successfully embedded [%s] (%d chunks) -> %s", record.document_id, len(chunks), dest_json_path)
+
+        # Optionally also persist into the Chroma vector store.
+        if vector_store is not None:
+            written = vector_store.add_embedded_chunks(embedded_chunks)
+            logger.info("  -> upserted %d chunks into Chroma vector store", written)
+
         return True
 
     except Exception as e:
@@ -173,6 +180,22 @@ def main():
         required=False,
         default=None,
         help="Custom output directory (default: embedding/ with mirrored paths)",
+    )
+    parser.add_argument(
+        "--vector-db",
+        dest="vector_db",
+        action="store_true",
+        default=False,
+        help=(
+            "Also write embeddings into a Chroma persistent store under vector_db/ "
+            "(default: off; JSON persistence behavior is unchanged either way)."
+        ),
+    )
+    parser.add_argument(
+        "--vector-db-dir",
+        dest="vector_db_dir",
+        default=None,
+        help="Custom Chroma persistent directory (default: vector_db/).",
     )
 
     args = parser.parse_args()
@@ -200,6 +223,18 @@ def main():
 
     embedder = LocalEmbedder()
 
+    # Optionally open the Chroma vector store (only when --vector-db is set, so
+    # default runs neither import chromadb nor touch vector_db/).
+    vector_store = None
+    if args.vector_db:
+        from vector_service.chroma_store import ChromaStore
+
+        vector_db_dir = (
+            Path(args.vector_db_dir).resolve() if args.vector_db_dir else None
+        )
+        vector_store = ChromaStore(db_dir=vector_db_dir)
+        logger.info("Vector DB enabled: writing to Chroma at %s", vector_store.db_dir)
+
     success_count = 0
     fail_count = 0
 
@@ -210,6 +245,7 @@ def main():
             output_dir=output_dir,
             embedder=embedder,
             mirror=mirror,
+            vector_store=vector_store,
         )
         if ok:
             success_count += 1
@@ -219,6 +255,14 @@ def main():
     logger.info("=" * 60)
     logger.info("OKF embedding batch completed: %d succeeded, %d failed out of %d files.", success_count, fail_count, len(files))
     logger.info("Output location: %s", output_dir)
+    if vector_store is not None:
+        info = vector_store.stats()
+        logger.info(
+            "Vector DB: collection '%s' now holds %d records at %s",
+            info["collection_name"],
+            info["count"],
+            info["persist_dir"],
+        )
     logger.info("=" * 60)
 
     if fail_count > 0:

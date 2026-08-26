@@ -15,7 +15,10 @@ from typing import Optional
 
 from mcp.server import MCPServer
 
-from doc_service.api.dependencies import get_knowledge_service
+from doc_service.api.dependencies import (
+    get_embedding_knowledge_service,
+    get_knowledge_service,
+)
 
 # ---------------------------------------------------------------------------
 # MCP Server instance
@@ -105,6 +108,66 @@ def query_documents(
     ]
 
     return json.dumps({"query": query, "results": results}, ensure_ascii=False)
+
+
+@mcp.tool()
+def search_knowledge(
+    query: str,
+    top_k: int = 5,
+) -> str:
+    """
+    Search the enterprise knowledge base using semantic (embedding) retrieval
+    and return the top-K most relevant chunks as grounding context.
+
+    This tool retrieves raw context only — it does NOT generate a final answer.
+    The calling agent should read the returned chunks and synthesize the answer
+    itself, citing the sources it used.
+
+    Args:
+        query: A natural-language question or search query.
+        top_k: Maximum number of relevant chunks to return (default: 5).
+
+    Returns:
+        JSON object of the form:
+          {
+            "query": "...",
+            "top_k": 5,
+            "results": [
+              {
+                "rank": 1,
+                "score": 0.62,
+                "document_id": "...",
+                "heading": "...",
+                "chunk_id": "...",
+                "title": "...",
+                "source_path": "...",
+                "text": "..."
+              }
+            ]
+          }
+        Results are ordered by descending relevance (rank 1 is most relevant).
+    """
+    service = get_embedding_knowledge_service()
+    chunk_results = service.search(query=query, top_k=top_k)
+
+    results = [
+        {
+            "rank": rank,
+            "score": r.score,
+            "document_id": r.document_id,
+            "heading": r.heading,
+            "chunk_id": r.chunk_id,
+            "title": r.title,
+            "source_path": r.source_path,
+            "text": r.content,
+        }
+        for rank, r in enumerate(chunk_results, start=1)
+    ]
+
+    return json.dumps(
+        {"query": query, "top_k": top_k, "results": results},
+        ensure_ascii=False,
+    )
 
 
 @mcp.tool()

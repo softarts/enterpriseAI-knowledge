@@ -92,6 +92,20 @@ All raw document ingestion pipelines (including OKF conversion and Embedding gen
 - Metadata fields (`source_path`, `document_id`, `title`, etc.) MUST be inherited directly from OKF frontmatter and NEVER re-derived from raw files.
 - The destination `embedding/` directory mirrors the `generated/` subfolder hierarchy (e.g. `generated/confluence/.../xxx.yaml` -> `embedding/confluence/.../xxx.json`).
 
+## Rule: Always Write a Task Summary
+
+Every completed task MUST be recorded with a task summary file.
+
+- After finishing a task (whether it succeeds or fails), the agent MUST write a
+  summary to `docs/task-summaries/`.
+- Use a descriptive, dated filename, e.g. `docs/task-summaries/YYYY-MM-DD-<short-slug>.md`.
+- Each summary MUST cover:
+  - What was implemented or attempted (files added/modified).
+  - How it was verified (commands run and their results).
+  - Known limitations, assumptions, and any follow-up / future work.
+- This rule applies to all tasks, including partial or failed ones; a failed task
+  summary must state what failed and why.
+
 ## Available Skills
 
 The following skills can be loaded for detailed implementation guidance:
