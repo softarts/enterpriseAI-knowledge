@@ -106,6 +106,22 @@ Every completed task MUST be recorded with a task summary file.
 - This rule applies to all tasks, including partial or failed ones; a failed task
   summary must state what failed and why.
 
+## Rule: Task Completion Report and README Sync (Project-Level)
+
+Every completed task MUST produce a task completion report, and MUST keep the
+README in sync whenever architecture or usage changes.
+
+- **Task completion report**: after finishing any task (success or failure), the
+  agent MUST write a task completion report describing what was done, the main
+  files, how to run/use it, verification results, and functionality that is NOT
+  implemented. This complements the dated `docs/task-summaries/` file required by
+  the "Always Write a Task Summary" rule.
+- **README sync**: if a task changes the project architecture or the way the
+  project is used/run (new service/module, new API, new startup command, new
+  data flow, etc.), the agent MUST update `README.md` in the same task so the
+  README always reflects the current architecture and usage.
+- These are project-level requirements and apply to all tasks, not just this one.
+
 ## Available Skills
 
 The following skills can be loaded for detailed implementation guidance:

@@ -18,3 +18,6 @@ httpx>=0.27.0
 
 # Vector DB (Chroma) - Phase 1 integration
 chromadb>=1.5.0
+
+# chat_service - Hugging Face Cloud Inference (Enterprise AI Playground)
+huggingface_hub>=0.24.0

@@ -8,3 +8,7 @@ all_documents/
 # Chroma persistent vector store
 vector_db/
 .__tmp_chroma_probe/
+
+# chat_service frontend (React + Vite)
+chat_service/frontend/node_modules/
+chat_service/frontend/dist/

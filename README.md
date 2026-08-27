@@ -853,3 +853,133 @@ Document + Metadata
 最关键的一句话：
 
 > Embedding 把语义转换成向量空间中的位置；HNSW 利用这些位置之间的近邻关系建立导航图，从而避免每次查询都扫描所有向量。
+
+---
+
+# chat_service — Enterprise AI Playground（对话前端 + 后端）
+
+`chat_service` 是一个**独立**的服务模块，实现了一个最小可用的 Enterprise AI
+Playground Web UI，并把前后端跑通。它与 `doc_service` / `vector_service` / MCP
+解耦：第一版只实现最直接的 Ask 流程——用户提问经 `chat_service` 调用 Hugging Face
+Cloud LLM，返回答案与可扩展的执行 trace。**当前不接 Chroma、不接 MCP、不做 RAG。**
+
+## 流程图
+
+```
+Browser (React UI, :5173)
+   |
+   |  POST /api/chat  { question }
+   v
+chat_service (FastAPI, :8100)
+   |  ChatService.ask()  ->  [request step]
+   |                          (RAG seam: 未来在此插入 vector_service.search())
+   v
+Hugging Face Cloud LLM  (openai/gpt-oss-120b, InferenceClient)
+   |
+   v
+Answer + Trace  ->  { answer, trace{ steps[], request, llm, response }, error }
+   |
+   v
+Browser: 中间显示回答，右侧 Trace 面板显示真实执行过程
+```
+
+## 前后端结构
+
+```
+chat_service/
+  config.py                 # 从环境变量读取 HF_TOKEN / 模型 / 端口 / CORS（token 不入代码）
+  models.py                 # ChatRequest{question} / ChatResponse{answer, trace, error}
+  trace.py                  # TraceBuilder：可扩展 trace（steps[] + request/llm/response）
+  llm/hf_client.py          # HuggingFaceLLM：InferenceClient(api_key=HF_TOKEN, provider="auto")
+  services/chat_service.py  # ChatService.ask()：编排 request -> LLM -> response；含 RAG 预留接口
+  api/routes_chat.py        # GET /api/health, POST /api/chat
+  main.py                   # FastAPI app + CORS
+  run.py                    # python -m chat_service.run（uvicorn :8100）
+  frontend/                 # React + Vite（:5173，/api 代理到 :8100）
+    src/App.jsx             # 顶层状态：messages / loading / trace / 折叠开关
+    src/components/
+      Layout.jsx            # 三段式栅格外壳；中间随两侧折叠自适应
+      Sidebar.jsx           # 左侧：可折叠，Chat / Documents / Settings 菜单入口
+      ChatWindow.jsx        # 中间：消息列表 + loading + 输入框
+      Message.jsx           # 单条消息气泡（user / assistant / error）
+      InputBox.jsx          # 输入框（Enter 发送，Shift+Enter 换行）
+      TracePanel.jsx        # 右侧：可折叠，渲染后端返回的真实 trace（非 mock）
+    src/api/chatApi.js      # askQuestion() -> POST /api/chat
+```
+
+## UI：三段式布局
+
+- **左侧 Sidebar**：可展开/隐藏，放 Chat、Documents 等菜单入口（当前为占位）。
+- **中间对话区**：显示用户问题与 LLM 回答，底部为输入框；支持 loading、错误、正常回答三种状态。
+- **右侧 Verbose / Trace 面板**：可展开/隐藏，显示本次请求的**真实**执行过程
+  （每个 step 的 name / status / detail / 耗时）。
+- 左右两侧折叠时，中间对话区自动自适应宽度。
+
+## API
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/health` | 返回服务状态、模型名、`hf_token_configured`（布尔，不返回 token 本身） |
+| `POST` | `/api/chat` | 输入 `{ question }`，返回 `{ answer, trace, error }` |
+
+`trace` 结构（可扩展）：
+
+```json
+{
+  "trace_id": "…", "duration_ms": 1835.45,
+  "steps": [
+    { "name": "request",  "status": "ok", "detail": { … } },
+    { "name": "llm",      "status": "ok", "detail": { "provider": "huggingface", "model": "…", "usage": { … } }, "duration_ms": 1835.43 },
+    { "name": "response", "status": "ok", "detail": { "answer_chars": 6 } }
+  ],
+  "request": { … }, "llm": { … }, "response": { … }
+}
+```
+
+## 当前 Ask 请求流程
+
+1. 前端 `POST /api/chat`，body 为 `{ question }`。
+2. `ChatService.ask()` 记录 `request` step。
+3. `HuggingFaceLLM.chat()` 用 `InferenceClient(api_key=HF_TOKEN, provider="auto")`
+   调用 `chat.completions.create(model="openai/gpt-oss-120b", …)`，记录 `llm` step（含 token usage）。
+4. 记录 `response` step，返回 `{ answer, trace }`。
+5. 缺少 token 或上游报错时，返回 `error` 字段并把对应 step 标记为 `error`，UI 会渲染错误信息。
+
+## 如何启动
+
+后端（终端 1，需先在环境中设置 `HF_TOKEN`）：
+
+```powershell
+$env:HF_TOKEN = "hf_xxx"
+python -m chat_service.run          # http://localhost:8100
+```
+
+前端（终端 2）：
+
+```powershell
+cd chat_service/frontend
+npm install                          # 首次
+npm run dev                          # http://localhost:5173
+```
+
+浏览器打开 `http://localhost:5173` 提问即可。**注意**：前端不直接访问 Hugging Face，
+所有能力经 `chat_service` API 提供；`HF_TOKEN` 只存在于后端环境变量中。
+
+## 后续接入 Chroma / RAG 的预留位置
+
+`chat_service/services/chat_service.py` 的 `ask()` 中，在 `request` 与 `llm` 两个
+step 之间保留了明确注释的 **RAG seam**。未来接入检索时：
+
+1. 在调用 LLM 之前执行检索（例如通过一个薄封装调用 `vector_service.search(question, top_k)`）。
+2. 新增一个 `retrieval`（以及可选的 `context`）trace step —— 右侧面板会自动渲染。
+3. 把 assemble 后的 context 前置到 LLM prompt。
+
+`POST /api/chat` 的接口、返回结构与前端**均无需改动**，只是 trace 中多出新的 step。
+
+## 必要文件及其职责
+
+见上方“前后端结构”表；核心职责：`hf_client.py`（唯一的 HF 调用点）、
+`chat_service.py`（编排 + trace + RAG 预留）、`TracePanel.jsx`（渲染真实 trace）。
+
+> 完整实现说明、验证结果与未实现功能清单见根目录
+> [`TASK_COMPLETION_REPORT_chat_service.md`](TASK_COMPLETION_REPORT_chat_service.md)。
