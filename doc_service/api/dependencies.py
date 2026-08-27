@@ -66,9 +66,45 @@ def get_embedding_knowledge_service() -> KnowledgeService:
     return _embedding_service_instance
 
 
+from embedding_service.embedder import LocalEmbedder
+from vector_service.chroma_store import ChromaStore
+
+_chroma_store_instance: Optional[ChromaStore] = None
+_local_embedder_instance: Optional[LocalEmbedder] = None
+
+
+def get_chroma_store() -> ChromaStore:
+    """
+    Lazily create and cache a ChromaStore singleton (persistent Chroma at vector_db/).
+
+    Used by the MCP `search_chroma` tool. The store only does vector queries —
+    it does NOT embed text, keeping embedding and storage decoupled.
+    """
+    global _chroma_store_instance
+    if _chroma_store_instance is None:
+        _chroma_store_instance = ChromaStore()
+    return _chroma_store_instance
+
+
+def get_local_embedder() -> LocalEmbedder:
+    """
+    Lazily create and cache a LocalEmbedder singleton (SBERT all-MiniLM-L6-v2).
+
+    Used by the MCP `search_chroma` tool to encode the query text into a vector
+    before sending it to Chroma.
+    """
+    global _local_embedder_instance
+    if _local_embedder_instance is None:
+        _local_embedder_instance = LocalEmbedder()
+    return _local_embedder_instance
+
+
 def reset_service() -> None:
     """Reset the cached service instances. Used in tests."""
     global _service_instance, _embedding_service_instance, _shared_repository
+    global _chroma_store_instance, _local_embedder_instance
     _service_instance = None
     _embedding_service_instance = None
     _shared_repository = None
+    _chroma_store_instance = None
+    _local_embedder_instance = None

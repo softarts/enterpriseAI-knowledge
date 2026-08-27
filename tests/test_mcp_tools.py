@@ -30,13 +30,14 @@ async def mcp_client(set_test_okf_dir):
 
 @pytest.mark.asyncio
 async def test_list_tools(mcp_client):
-    """MCP server exposes exactly four tools."""
+    """MCP server exposes exactly five tools."""
     result = await mcp_client.list_tools()
     tool_names = sorted(t.name for t in result.tools)
     assert tool_names == [
         "get_document",
         "list_documents",
         "query_documents",
+        "search_chroma",
         "search_knowledge",
     ]
 
@@ -168,6 +169,55 @@ async def test_search_knowledge_respects_top_k(mcp_client):
     """search_knowledge never returns more than top_k results."""
     result = await mcp_client.call_tool(
         "search_knowledge", {"query": "policy", "top_k": 2}
+    )
+    data = json.loads(result.content[0].text)
+    assert len(data["results"]) <= 2
+
+
+@pytest.mark.asyncio
+async def test_search_chroma_shape(mcp_client):
+    """
+    search_chroma returns Chroma-backed vector search results with correct shape.
+
+    It reads from the project's persisted `vector_db/` directory (Chroma).
+    We assert the response envelope and per-result field contract.
+    """
+    result = await mcp_client.call_tool(
+        "search_chroma", {"query": "compliance evidence bundle", "top_k": 3}
+    )
+    assert not result.is_error
+
+    data = json.loads(result.content[0].text)
+    assert data["query"] == "compliance evidence bundle"
+    assert data["top_k"] == 3
+    assert data["backend"] == "chroma"
+    assert "results" in data
+    assert isinstance(data["results"], list)
+    assert len(data["results"]) <= 3
+
+    for expected_rank, item in enumerate(data["results"], start=1):
+        assert item["rank"] == expected_rank
+        for field in (
+            "rank",
+            "distance",
+            "score",
+            "document_id",
+            "heading",
+            "chunk_id",
+            "title",
+            "source_path",
+            "text",
+        ):
+            assert field in item
+        # distance and score should be complementary
+        assert abs(item["score"] - (1.0 - item["distance"])) < 0.001
+
+
+@pytest.mark.asyncio
+async def test_search_chroma_respects_top_k(mcp_client):
+    """search_chroma never returns more than top_k results."""
+    result = await mcp_client.call_tool(
+        "search_chroma", {"query": "policy", "top_k": 2}
     )
     data = json.loads(result.content[0].text)
     assert len(data["results"]) <= 2

@@ -16,8 +16,10 @@ from typing import Optional
 from mcp.server import MCPServer
 
 from doc_service.api.dependencies import (
+    get_chroma_store,
     get_embedding_knowledge_service,
     get_knowledge_service,
+    get_local_embedder,
 )
 
 # ---------------------------------------------------------------------------
@@ -166,6 +168,76 @@ def search_knowledge(
 
     return json.dumps(
         {"query": query, "top_k": top_k, "results": results},
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool()
+def search_chroma(
+    query: str,
+    top_k: int = 5,
+) -> str:
+    """
+    Search the enterprise knowledge base using Chroma vector database.
+
+    This tool encodes the query with SBERT (all-MiniLM-L6-v2), performs a
+    cosine-distance nearest-neighbor search against the Chroma persistent store,
+    and returns the Top-K most relevant chunks.
+
+    It returns raw context only — it does NOT generate a final answer.
+    The calling agent should read the returned chunks and synthesize the answer
+    itself, citing the sources it used.
+
+    Args:
+        query: A natural-language question or search query.
+        top_k: Maximum number of relevant chunks to return (default: 5).
+
+    Returns:
+        JSON object of the form:
+          {
+            "query": "...",
+            "top_k": 5,
+            "backend": "chroma",
+            "results": [
+              {
+                "rank": 1,
+                "distance": 0.41,
+                "score": 0.59,
+                "document_id": "...",
+                "heading": "...",
+                "chunk_id": "...",
+                "title": "...",
+                "source_path": "...",
+                "text": "..."
+              }
+            ]
+          }
+        Results are ordered by ascending distance (rank 1 is most relevant).
+        `score` is the cosine similarity (1 - distance) for convenience.
+    """
+    embedder = get_local_embedder()
+    store = get_chroma_store()
+
+    query_vector = embedder.embed_query(query)
+    hits = store.query(query_vector, top_k=top_k)
+
+    results = [
+        {
+            "rank": hit.rank,
+            "distance": round(hit.distance, 4),
+            "score": round(1.0 - hit.distance, 4),
+            "document_id": hit.document_id,
+            "heading": hit.heading,
+            "chunk_id": hit.chunk_id,
+            "title": hit.title,
+            "source_path": hit.source_path,
+            "text": hit.text,
+        }
+        for hit in hits
+    ]
+
+    return json.dumps(
+        {"query": query, "top_k": top_k, "backend": "chroma", "results": results},
         ensure_ascii=False,
     )
 
