@@ -12,3 +12,4 @@ vector_db/
 # chat_service frontend (React + Vite)
 chat_service/frontend/node_modules/
 chat_service/frontend/dist/
+env.bat

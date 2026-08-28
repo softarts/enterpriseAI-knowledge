@@ -433,7 +433,130 @@ search_chroma (server.py:176)
 | `.kiro/skills/enterprise-knowledge.md` | 约束“必须通过 MCP 查询”的技能 |
 | `.kiro/settings/mcp.json` | Kiro 侧的 MCP 服务器连接配置 |
 
+---
 
+## Chat Playground（chat_service + 前端）
+
+`chat_service/` 是一个独立的对话后端 + React 前端 playground，目前实现的是直连
+Hugging Face LLM 的单轮 Ask 流程：`question → HF LLM → answer + trace`。
+
+### 1. 对话历史记录：存在哪、怎么渲染
+
+**历史记录保存在前端（浏览器内存），不在后端。**
+
+后端 `chat_service` 是**无状态的**：`POST /api/chat` 每次只接收单个 `question`
+（见 `chat_service/models.py` 的 `ChatRequest`，只有一个 `question` 字段），
+返回单条 `answer + trace`，服务端不保存任何历史。`ChatService` 也标注了
+`stateless; safe to reuse`（`chat_service/api/routes_chat.py:19`）。
+
+历史记录完全由前端 React 的组件 state 持有：
+
+| 关注点 | 位置（文件:行号） | 说明 |
+|---|---|---|
+| 历史记录状态 | `chat_service/frontend/src/App.jsx:11` | `const [messages, setMessages] = useState([])` —— 整个对话数组 |
+| 追加用户消息 | `chat_service/frontend/src/App.jsx:18` | 发送时把 `{role:"user", content}` push 进 messages |
+| 追加助手/错误消息 | `chat_service/frontend/src/App.jsx:27-40` | 收到响应后追加 `{role:"assistant"...}` 或 `{role:"error"...}` |
+| 渲染消息列表 | `chat_service/frontend/src/components/ChatWindow.jsx:38-40` | `messages.map(...)` 逐条渲染 |
+| 单条气泡渲染 | `chat_service/frontend/src/components/Message.jsx` | 按 `role`（user / assistant / error）渲染不同样式的气泡 |
+| 自动滚动到底部 | `chat_service/frontend/src/components/ChatWindow.jsx:11-13` | `useEffect` + `scrollIntoView` |
+| 调用后端 | `chat_service/frontend/src/api/chatApi.js:17` | `fetch("/api/chat", ...)` |
+
+渲染流程：
+
+```
+用户输入
+  → App.handleSend()  (App.jsx:17)
+     → setMessages 追加 user 消息      (App.jsx:18)
+     → askQuestion() 调用后端           (chatApi.js:17)
+     → setMessages 追加 assistant 消息  (App.jsx:31)
+  → <ChatWindow messages> 重新渲染       (ChatWindow.jsx)
+     → messages.map → <Message>          (ChatWindow.jsx:38)
+```
+
+**重要含义**：因为历史只在前端内存里，**刷新页面就会清空对话**；而且由于后端每次
+只收到当前 `question`（不带历史），LLM **没有多轮上下文记忆**。若要做多轮记忆，需要
+前端把历史一起发给后端，或在后端引入 session/持久化（当前未实现）。
+
+### 2. 为什么限制 `max_tokens`，会不会截断 LLM 响应
+
+你看到的这段是后端 trace 里记录的 LLM 调用元数据：
+
+```json
+{
+  "provider": "huggingface",
+  "model": "openai/gpt-oss-120b",
+  "max_tokens": 512,
+  "finish_reason": "length",
+  "usage": { "prompt_tokens": 97, "completion_tokens": 512, "total_tokens": 609 }
+}
+```
+
+`max_tokens` 在 `chat_service/llm/hf_client.py` 里作为
+`client.chat.completions.create(..., max_tokens=self.max_tokens)` 传给 HF API，
+默认值来自配置（512）。
+
+**为什么要限制**：
+- **控制成本与延迟**：completion tokens 越多，费用和响应时间越高。
+- **防止失控输出**：给模型输出设一个安全上限。
+- 注意 `max_tokens` **只限制“生成部分（completion）”的长度，不影响 prompt**。上例
+  `prompt_tokens=97` 不受影响，被限制的是 `completion_tokens`。
+
+**是否会截断**：**会**。关键信号是 `finish_reason: "length"` 且
+`completion_tokens == max_tokens (512)`——这说明模型是因为**触达 token 上限被强制停止**，
+而不是自然把话说完（自然结束时 `finish_reason` 通常是 `"stop"`）。所以这次响应
+**确实被截断了**。
+
+**怎么办**：
+- 需要更长答案时，调高 `max_tokens`（见下一节，改配置或设 `CHAT_MAX_TOKENS`）。
+- 在 UI/trace 中把 `finish_reason == "length"` 显式提示为“答案可能被截断”。
+- （后续）支持续写：把已生成内容作为上下文再请求一次继续生成。
+
+### 3. 把 model / api_key 放进配置文件（api_key 指向环境变量）
+
+已实现：新增 `chat_service/llm_config.yaml`，把非机密的 LLM 设置和 token 的**引用**
+集中管理。**`api_key` 存的是环境变量引用 `${HF_TOKEN}`，不是真实 token**：
+
+```yaml
+# chat_service/llm_config.yaml
+provider: huggingface
+model: openai/gpt-oss-120b
+api_key: ${HF_TOKEN}   # 指向环境变量，不是真实密钥
+max_tokens: 512
+```
+
+加载逻辑在 `chat_service/config.py`：
+
+| 功能 | 位置 | 说明 |
+|---|---|---|
+| `${VAR}` 解析 | `chat_service/config.py:_resolve_env_refs` | 把字符串里的 `${VAR}` 替换成对应环境变量值 |
+| 读取 YAML | `chat_service/config.py:_load_llm_config` | 读 `llm_config.yaml` 并解析引用 |
+| 记住 token 变量名 | `chat_service/config.py:_extract_token_env_var` | 从 `api_key: ${HF_TOKEN}` 里解析出变量名 `HF_TOKEN` |
+| 实际取 token | `chat_service/config.py` 的 `hf_token()` | 运行时从该环境变量读取，token 值**从不**存到对象上 |
+
+**解析优先级**：环境变量（`CHAT_MODEL` / `CHAT_MAX_TOKENS`）> `llm_config.yaml` > 内置默认值。
+
+**安全要点**：
+- 真实 token 只存在于环境变量 `HF_TOKEN`，配置文件里只有引用 `${HF_TOKEN}`，可安全提交。
+- token 值不会被 log、不返回前端、也不存在 `settings` 对象上（`/api/health` 只返回
+  `hf_token_configured: true/false`，见 `routes_chat.py`）。
+- 想换 token 来源变量名，只需改 YAML 里的 `api_key: ${OTHER_VAR}`，代码会自动跟随。
+
+用法：
+
+```bash
+# 1) 在环境变量里放真实 token（不要写进任何文件）
+set HF_TOKEN=hf_xxx            # Windows (cmd)
+$env:HF_TOKEN="hf_xxx"        # Windows (PowerShell)
+export HF_TOKEN=hf_xxx         # macOS / Linux
+
+# 2) 模型 / max_tokens 改配置文件 chat_service/llm_config.yaml 即可
+#    （或用 CHAT_MODEL / CHAT_MAX_TOKENS 环境变量临时覆盖）
+
+# 3) 启动
+python -m chat_service.run
+```
+
+---
 
 # ChromaDB 与向量索引：讨论总结
 
