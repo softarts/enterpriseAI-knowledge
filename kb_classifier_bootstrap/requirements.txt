@@ -1,0 +1,27 @@
+# Bootstrap (Stage A) dependencies.
+#
+# torch is intentionally NOT pinned here: install the build matching the target
+# machine's CUDA version first, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+#
+# NOTE: do NOT install the standalone `hdbscan` package. scikit-learn >= 1.3
+# ships sklearn.cluster.HDBSCAN, which is what bootstrap/discovery.py uses.
+
+sentence-transformers>=5.0
+scikit-learn>=1.3
+numpy>=1.24
+scipy>=1.10
+requests>=2.31
+
+# Versions verified working on the original machine (2026-08-29):
+#   torch==2.10.0+cu128
+#   sentence-transformers==6.0.0
+#   transformers==5.15.1
+#   scikit-learn==1.9.0
+#   scipy==1.17.1
+#   numpy==2.4.4
+#   huggingface_hub==1.28.0
+#   tokenizers==0.22.2
+#   safetensors==0.8.0
+#   sentencepiece==0.2.1
+#   Python 3.11.9
