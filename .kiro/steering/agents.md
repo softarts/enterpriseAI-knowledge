@@ -122,6 +122,31 @@ README in sync whenever architecture or usage changes.
   README always reflects the current architecture and usage.
 - These are project-level requirements and apply to all tasks, not just this one.
 
+## Rule: Never Rename or Overwrite Generated Artifacts — Version Them
+
+The agent MUST NOT rename, move, or silently overwrite any previously generated
+artifact (reports, exports, or other run outputs) on its own initiative.
+
+- When a task regenerates an artifact that already exists (e.g. a report), the
+  agent MUST write the new output as a **new versioned file** rather than
+  overwriting or renaming the old one.
+- **Naming convention for regenerated artifacts**: keep the original base name,
+  then append an incrementing version number and a timestamp:
+
+  ```
+  <base_name>_v<N>_<YYYYMMDD-HHMM>.<ext>
+  ```
+
+  Example: `bootstrap_report_v2_20260830-1228.md`. `<N>` increments from the
+  highest existing version for that base name; `<YYYYMMDD-HHMM>` is the local
+  generation time (year, month, day, hour, minute).
+- The agent MUST NOT reuse a bare, unversioned name (e.g. `bootstrap_report.md`)
+  for a fresh run, and MUST NOT rename an earlier run's file to make room. Each
+  run's output stands on its own so history is never lost.
+- This applies to every artifact a run produces where a prior version could
+  exist. Code files and config deliverables consumed by downstream stages
+  (whose path is part of a contract) are exempt and follow their own rules.
+
 ## Available Skills
 
 The following skills can be loaded for detailed implementation guidance:

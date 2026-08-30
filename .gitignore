@@ -1,7 +1,6 @@
 enterpriseag-bench_all_documents/
 *.pyc
 *.zip
-enterpriserag-bench_all_documents/**
 all_documents/
 
 
@@ -13,3 +12,9 @@ vector_db/
 chat_service/frontend/node_modules/
 chat_service/frontend/dist/
 env.bat
+.DS_Store
+*.npy
+kb_classifier_bootstrap/work/**
+kb_classifier_bootstrap/work/embeddings/shard_000000000.npy
+kb_classifier_bootstrap/work/embeddings/shard_000000000.npy
+kb_classifier_bootstrap/work/embeddings/shard_000000000.npy

@@ -309,6 +309,85 @@ def build_manifest(cfg: CorpusSettings, manifest_path: str) -> List[ManifestEntr
     return entries
 
 
+def extend_manifest(
+    cfg: CorpusSettings,
+    manifest_path: str,
+    existing: List["ManifestEntry"],
+    target_total: int,
+) -> List[ManifestEntry]:
+    """Grow an existing manifest to ``target_total`` docs, preserving its prefix.
+
+    The first ``len(existing)`` rows are kept byte-for-byte (same rel_path, same
+    doc_index), so every embedding shard that covers only those rows stays valid
+    and can be reused. Only the *new* documents are sampled and appended.
+
+    New docs are drawn (stratified) from the candidates NOT already in the
+    manifest, using the same proportional-with-floor logic so the added slice
+    keeps every channel/mailbox/space represented. A distinct sampling seed is
+    used for the top-up so it is reproducible but independent of the original
+    draw.
+    """
+    log.info("[corpus] extending manifest %d -> %d docs (preserving prefix) ...",
+             len(existing), target_total)
+    candidates = _scan_candidates(cfg)
+    log.info("[corpus] found %d candidate documents", len(candidates))
+
+    already = {e.rel_path for e in existing}
+    remaining_candidates = [c for c in candidates if c[0] not in already]
+    n_new = target_total - len(existing)
+    if n_new <= 0:
+        log.warning("[corpus] target_total %d <= existing %d; nothing to add",
+                    target_total, len(existing))
+        return existing
+    if n_new >= len(remaining_candidates):
+        log.info("[corpus] requested %d new docs but only %d candidates remain; "
+                 "taking all remaining", n_new, len(remaining_candidates))
+        new_sel = sorted(remaining_candidates, key=lambda t: t[0])
+    elif cfg.stratify:
+        log.info("[corpus] stratified sampling %d NEW docs "
+                 "(stratum_depth=%d, min_per_stratum=%d, seed=%d)",
+                 n_new, cfg.stratum_depth, cfg.min_per_stratum, cfg.sampling_seed + 1)
+        new_sel = stratified_sample(
+            remaining_candidates, n_new, cfg.min_per_stratum, cfg.sampling_seed + 1)
+    else:
+        rng = random.Random(cfg.sampling_seed + 1)
+        new_sel = sorted(rng.sample(remaining_candidates, n_new))
+
+    # Keep the existing entries exactly; append the new ones after them. New
+    # rows are appended in sorted rel_path order for determinism, but they keep
+    # ascending doc_index continuing from the prefix (order within the appended
+    # block does not affect prefix-shard validity).
+    entries: List[ManifestEntry] = list(existing)
+    start_index = len(existing)
+    for j, (rel, stratum, source) in enumerate(sorted(new_sel, key=lambda t: t[0])):
+        entries.append(
+            ManifestEntry(
+                doc_index=start_index + j,
+                doc_id=_derive_doc_id(rel),
+                rel_path=rel,
+                stratum=stratum,
+                source=source,
+                title="",
+            )
+        )
+
+    os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+    tmp = manifest_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for e in entries:
+            f.write(e.to_json() + "\n")
+    os.replace(tmp, manifest_path)
+
+    by_source: Dict[str, int] = defaultdict(int)
+    for e in entries:
+        by_source[e.source] += 1
+    log.info("[corpus] manifest extended: %d documents (%d preserved + %d new) -> %s",
+             len(entries), len(existing), len(entries) - len(existing), manifest_path)
+    for s in sorted(by_source, key=lambda k: -by_source[k]):
+        log.info("[corpus]   %-16s %7d", s, by_source[s])
+    return entries
+
+
 def load_manifest(manifest_path: str) -> List[ManifestEntry]:
     entries: List[ManifestEntry] = []
     with open(manifest_path, "r", encoding="utf-8") as f:
@@ -327,9 +406,22 @@ def load_manifest(manifest_path: str) -> List[ManifestEntry]:
 
 def manifest_fingerprint(entries: Sequence[ManifestEntry]) -> str:
     """Hash of the manifest identity, used to invalidate the embedding cache."""
+    return manifest_prefix_fingerprint(entries, len(entries))
+
+
+def manifest_prefix_fingerprint(entries: Sequence[ManifestEntry], k: int) -> str:
+    """Fingerprint of just the first ``k`` rows of a manifest.
+
+    ``manifest_fingerprint(entries) == manifest_prefix_fingerprint(entries,
+    len(entries))``. The prefix form lets the embedder confirm that a larger
+    manifest still begins with exactly the document set an existing cache was
+    built from -- i.e. that the cache's shards (which cover rows [0, cached_n))
+    remain valid -- without requiring the whole manifest to be unchanged.
+    """
+    k = max(0, min(k, len(entries)))
     h = hashlib.sha256()
-    h.update(str(len(entries)).encode())
-    for e in entries:
+    h.update(str(k).encode())
+    for e in entries[:k]:
         h.update(e.rel_path.encode("utf-8"))
         h.update(b"\0")
     return h.hexdigest()[:32]

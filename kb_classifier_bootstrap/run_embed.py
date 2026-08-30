@@ -36,8 +36,10 @@ from typing import List, Optional
 
 from .bootstrap.corpus import (
     build_manifest,
+    extend_manifest,
     load_manifest,
     manifest_fingerprint,
+    manifest_prefix_fingerprint,
 )
 from .bootstrap.embedder import (
     BgeM3Embedder,
@@ -141,6 +143,24 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         log.info(line)
 
     path = cfg.paths.manifest_path
+
+    # Extend mode: grow an existing manifest, preserving its prefix so the
+    # embedding cache built from it can be reused (only new docs get embedded).
+    if getattr(args, "extend_to", None) is not None:
+        if not os.path.exists(path):
+            log.error("[manifest] --extend-to needs an existing manifest at %s; "
+                      "build one first.", path)
+            return 1
+        existing = load_manifest(path)
+        entries = extend_manifest(cfg.corpus, path, existing, args.extend_to)
+        log.info("[manifest] fingerprint = %s", manifest_fingerprint(entries))
+        log.info("[manifest] prefix fingerprint @%d = %s (must match the cache)",
+                 len(existing), manifest_prefix_fingerprint(entries, len(existing)))
+        log.info("[manifest] planned shards: %d at shard_size=%d",
+                 len(plan_shards(len(entries), cfg.embedding.shard_size)),
+                 cfg.embedding.shard_size)
+        return 0
+
     if os.path.exists(path) and not args.force:
         entries = load_manifest(path)
         log.warning(
@@ -236,6 +256,8 @@ def _run_embed(cfg: Settings, *, max_new_shards, time_budget_s) -> int:
             shard_size=cfg.embedding.shard_size,
             max_new_shards=max_new_shards,
             time_budget_s=time_budget_s,
+            prefix_fingerprint_at=lambda k: manifest_prefix_fingerprint(entries, k),
+            vector_store_path=cfg.paths.vector_store_path,
         )
     except CacheStateError as exc:
         log.error("[embed] %s", exc)
@@ -346,6 +368,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     sp = sub.add_parser("manifest", help="scan the corpus and freeze the document manifest")
     sp.add_argument("--max-docs", type=int, default=None,
                     help="cap document count (omit for a true full scan)")
+    sp.add_argument("--extend-to", type=int, default=None,
+                    help="grow an existing manifest to this total, preserving its "
+                         "prefix so existing embedding shards are reused")
     sp.add_argument("--no-stratify", action="store_true",
                     help="uniform random sample instead of stratified")
     sp.add_argument("--force", action="store_true",

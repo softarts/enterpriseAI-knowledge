@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PKG_ROOT = os.path.dirname(_HERE)
@@ -102,11 +102,29 @@ class DiscoverySettings:
     min_pool_size: int = 5
 
     # HDBSCAN min_cluster_size. Scaled with pool size (see
-    # discovery.choose_min_cluster_size) so that a 40k-document pool does not
-    # get shattered into hundreds of 5-document nodes.
-    base_min_cluster_size: int = 5
-    min_cluster_size_pool_fraction: float = 0.01   # 1% of pool
-    max_min_cluster_size: int = 400
+    # discovery.choose_min_cluster_size).
+    #
+    # These values were re-tuned after the v2 (23k-doc) run, where the old
+    # settings (floor 5, fraction 0.01, cap 400) drove the 11.6k-document L1
+    # UNKNOWN pool to min_cluster_size=116 and HDBSCAN(eom) returned ZERO
+    # clusters (100% noise). An mcs sweep on that exact pool showed clusters
+    # only appear for mcs in ~[15, 45]; at mcs>=50 everything collapses to
+    # noise. The 1% fraction was hitting that dead zone as soon as a pool passed
+    # ~4,500 documents.
+    #
+    # New scaling: max(15, min(0.003 * pool, 50)).
+    #   - floor 15  : matches the v1 L1 pool (1,552 -> 15) that discovered fine;
+    #                 also stops tiny pools shattering into micro-clusters.
+    #   - 0.3%      : keeps mcs inside the productive band far longer
+    #                 (11,641 -> 34, still in [15,45]).
+    #   - cap 50    : an upper bound just below the empirical collapse point,
+    #                 so even very large pools stay clusterable.
+    # See choose_min_cluster_size: the fraction is applied to the *effective*
+    # clustering size (pool capped at max_pool_for_clustering), because pools
+    # larger than that are sub-sampled before HDBSCAN sees them.
+    base_min_cluster_size: int = 15
+    min_cluster_size_pool_fraction: float = 0.003
+    max_min_cluster_size: int = 50
 
     metric: str = "euclidean"   # on L2-normalised vectors this is monotone in
                                 # cosine distance, and is the fast code path
@@ -128,24 +146,33 @@ class DiscoverySettings:
 
 @dataclass(frozen=True)
 class NamingSettings:
-    """Local Ollama LLM naming of discovered clusters."""
+    """Local LLM naming of discovered clusters.
 
-    ollama_host: str = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    Naming uses a single local generation model, ``qwen3-8b-mlx``, served by
+    **LM Studio** over an *OpenAI-compatible* API (``/v1/chat/completions``).
+    Everything is fully local; no cloud LLM is called.
+    """
 
-    # Primary choice per the brief: code-specialised but built on the Qwen2.5
-    # base, so general language ability is intact and the extra parameters beat
-    # a 3B general model at "read five titles, emit a category name".
-    primary_model: str = "qwen2.5-coder:7b"
-    comparison_model: str = "qwen2.5:3b"
+    # OpenAI-compatible base URL (LM Studio default port 1234).
+    api_base: str = os.environ.get("LMSTUDIO_API_BASE", "http://localhost:1234/v1")
+    api_key: str = os.environ.get("LMSTUDIO_API_KEY", "lm-studio")  # LM Studio ignores it
 
-    # One-off model-selection experiment: run BOTH models on this many
-    # clusters, log both outputs side by side, then use primary_model for
-    # everything. This is model selection, not human-in-the-loop
-    # classification.
-    comparison_cluster_count: int = 4
+    # The single generation model loaded in LM Studio.
+    primary_model: str = "qwen3-8b-mlx"
+
+    # qwen3-8b-mlx is a *reasoning* model: left to itself it spends the token
+    # budget on a hidden chain-of-thought and can return empty content when the
+    # budget runs out. For "read five titles, emit a category name" reasoning
+    # adds only latency and truncation risk, so we suppress it with Qwen3's
+    # ``/no_think`` control token in the system prompt. chat_template_kwargs
+    # {"enable_thinking": false} was tested against this LM Studio build and did
+    # NOT take effect, so /no_think is the reliable lever.
+    disable_thinking: bool = True
 
     temperature: float = 0.1
-    num_predict: int = 200
+    # Generous ceiling: even with /no_think we leave headroom so a stray
+    # thinking token can never truncate the JSON answer.
+    max_tokens: int = 512
     request_timeout_s: int = 180
     max_retries: int = 2
 
@@ -190,6 +217,11 @@ class Paths:
         return os.path.join(self.embed_dir, "state.json")
 
     @property
+    def vector_store_path(self) -> str:
+        # Content-addressed embedding cache (SQLite), shared across manifests.
+        return os.path.join(self.work_dir, "vector_store.sqlite")
+
+    @property
     def anchor_cache_path(self) -> str:
         return os.path.join(self.work_dir, "anchor_embeddings.npz")
 
@@ -215,7 +247,133 @@ class Paths:
 
     @property
     def report_out_path(self) -> str:
+        # Base name only; the actual per-run file is versioned. See
+        # versioned_report_path(). Kept for reference/back-compat.
         return os.path.join(self.package_root, "bootstrap_report.md")
+
+    # ---- versioned discovery-loop artifacts ---------------------------------
+    #
+    # Each discovery round produces three artifacts that MUST share the same
+    # version number N so they can be cross-referenced:
+    #   config/taxonomy_v<N>.py          (the complete taxonomy that round built)
+    #   bootstrap_report_v<N>_<stamp>.md (its report)
+    #   work/snapshot_v<N>.json          (machine-readable snapshot for diffs)
+    # In addition config/taxonomy.py always mirrors the latest taxonomy_v<N>.py.
+    #
+    # N is derived from the HIGHEST version already present across all three
+    # artifact families, so a run is robust to any one of them being missing
+    # (e.g. legacy runs wrote reports/snapshots but no taxonomy_v<N>.py yet).
+
+    @staticmethod
+    def sample_count_label(n_docs: int) -> str:
+        """Human-friendly document-count tag for versioned filenames.
+
+        Derived from the round's ACTUAL document count, never hard-coded:
+          3000 -> "3k", 23000 -> "23k", 100000 -> "100k", 800 -> "800".
+        Values >= 1000 that divide evenly render as "<k>k"; otherwise a one-
+        decimal "k" (e.g. 1500 -> "1.5k"); values < 1000 render as the integer.
+        """
+        if n_docs >= 1000:
+            k = n_docs / 1000.0
+            if abs(k - round(k)) < 1e-9:
+                return f"{int(round(k))}k"
+            return f"{k:.1f}k"
+        return str(int(n_docs))
+
+    def _highest_existing_version(self) -> int:
+        import glob
+        import re
+
+        highest = 0
+        # Regexes tolerate BOTH the legacy pattern (taxonomy_v3.py) and the
+        # sample-count pattern (taxonomy_v4_100k.py), so version detection keeps
+        # working across the rename.
+        families = (
+            (self.config_dir, r"taxonomy_v(\d+)(?:_[^.]+)?\.py$"),
+            (self.package_root, r"bootstrap_report_v(\d+)_"),
+            (self.work_dir, r"snapshot_v(\d+)(?:_[^.]+)?\.json$"),
+        )
+        for directory, pat in families:
+            rx = re.compile(pat)
+            for p in glob.glob(os.path.join(directory, "*")):
+                m = rx.search(os.path.basename(p))
+                if m:
+                    highest = max(highest, int(m.group(1)))
+        # A legacy bare bootstrap_report.md counts as v1 if nothing else exists.
+        if highest == 0 and os.path.exists(self.report_out_path):
+            highest = 1
+        return highest
+
+    def next_version(self) -> int:
+        """The version number this round should use (highest existing + 1)."""
+        return self._highest_existing_version() + 1
+
+    def previous_version(self, current: int) -> int:
+        """Highest version strictly below ``current`` that has a snapshot, else 0."""
+        import glob
+        import re
+
+        # Match legacy (snapshot_v3.json) and sample-count (snapshot_v4_100k.json).
+        rx = re.compile(r"snapshot_v(\d+)(?:_[^.]+)?\.json$")
+        best = 0
+        for p in glob.glob(os.path.join(self.work_dir, "snapshot_v*.json")):
+            m = rx.search(os.path.basename(p))
+            if m:
+                v = int(m.group(1))
+                if v < current:
+                    best = max(best, v)
+        return best
+
+    @staticmethod
+    def _version_suffix(count_label: Optional[str]) -> str:
+        return f"_{count_label}" if count_label else ""
+
+    def taxonomy_version_path(self, version: int, count_label: Optional[str] = None) -> str:
+        """Per-round taxonomy file, e.g. taxonomy_v3_100k.py.
+
+        ``count_label`` comes from sample_count_label(n_docs). Omitting it yields
+        the legacy taxonomy_v<N>.py form (kept for back-compat / discovery).
+        """
+        return os.path.join(
+            self.config_dir,
+            f"taxonomy_v{version}{self._version_suffix(count_label)}.py",
+        )
+
+    def snapshot_path(self, version: int, count_label: Optional[str] = None) -> str:
+        return os.path.join(
+            self.work_dir,
+            f"snapshot_v{version}{self._version_suffix(count_label)}.json",
+        )
+
+    def find_snapshot_for_version(self, version: int) -> Optional[str]:
+        """Locate an existing snapshot for ``version`` regardless of its count
+        label (snapshot_v3.json or snapshot_v3_23k.json). Returns the path or
+        None. Used for the prev->current report diff, where the previous round's
+        document count is not known here.
+        """
+        import glob
+
+        matches = glob.glob(os.path.join(self.work_dir, f"snapshot_v{version}.json"))
+        matches += glob.glob(os.path.join(self.work_dir, f"snapshot_v{version}_*.json"))
+        return matches[0] if matches else None
+
+    def report_path_for_version(self, version: int, count_label: Optional[str] = None) -> str:
+        import time
+
+        stamp = time.strftime("%Y%m%d-%H%M")
+        return os.path.join(
+            self.package_root,
+            f"bootstrap_report_v{version}{self._version_suffix(count_label)}_{stamp}.md",
+        )
+
+    def versioned_report_path(self) -> str:
+        """Back-compat: next versioned report path for the shared N.
+
+        Kept for callers that only want the report path; prefer computing N once
+        via next_version() and using report_path_for_version(N) so the taxonomy,
+        report and snapshot all share the same N.
+        """
+        return self.report_path_for_version(self.next_version())
 
 
 @dataclass(frozen=True)

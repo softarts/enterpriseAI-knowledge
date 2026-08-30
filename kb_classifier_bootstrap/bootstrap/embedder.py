@@ -143,8 +143,16 @@ def verify_or_init_state(
     manifest_fingerprint: str,
     n_docs: int,
     embedding_dim: Optional[int] = None,
+    prefix_fingerprint_at: Optional[Callable[[int], str]] = None,
 ) -> dict:
-    """Load and validate the cache state, or create it on first run."""
+    """Load and validate the cache state, or create it on first run.
+
+    ``prefix_fingerprint_at(k)`` (optional) returns the fingerprint of the
+    current manifest's first ``k`` rows. When provided, a manifest that is a
+    strict *prefix-extension* of the cached one is accepted (the cache's shards
+    all live within the unchanged prefix, so they stay valid). Without it, only
+    an exactly-identical manifest resumes -- the original strict behaviour.
+    """
     desired = {
         "embedding": embed_fingerprint,
         "manifest_fingerprint": manifest_fingerprint,
@@ -165,11 +173,20 @@ def verify_or_init_state(
             f"embedding settings changed: cached={existing.get('embedding')} "
             f"current={embed_fingerprint}"
         )
-    if existing.get("manifest_fingerprint") != manifest_fingerprint:
+
+    cached_fp = existing.get("manifest_fingerprint")
+    cached_n = int(existing.get("n_docs", 0))
+    manifest_ok = cached_fp == manifest_fingerprint
+    extended = False
+    if not manifest_ok and prefix_fingerprint_at is not None and 0 < cached_n <= n_docs:
+        # Accept a manifest whose first cached_n rows match the cached set.
+        if prefix_fingerprint_at(cached_n) == cached_fp:
+            manifest_ok = True
+            extended = True
+    if not manifest_ok:
         mismatches.append(
             "manifest changed (different document set or ordering): "
-            f"cached={existing.get('manifest_fingerprint')} "
-            f"current={manifest_fingerprint}"
+            f"cached={cached_fp} current={manifest_fingerprint}"
         )
     if mismatches:
         raise CacheStateError(
@@ -179,6 +196,16 @@ def verify_or_init_state(
               "previous settings, or delete the embeddings directory to start "
               "a fresh pass."
         )
+
+    if extended:
+        log.info("[embed] existing cache covers the first %d of %d documents; the "
+                 "manifest is a valid prefix-extension, reusing those shards",
+                 cached_n, n_docs)
+        # Advance the recorded manifest identity to the (larger) current one.
+        existing["manifest_fingerprint"] = manifest_fingerprint
+        existing["n_docs"] = n_docs
+        existing["complete"] = False
+        _write_state(state_path, existing)
 
     if embedding_dim is not None and existing.get("embedding_dim") is None:
         existing["embedding_dim"] = embedding_dim
@@ -212,7 +239,13 @@ class BgeM3Embedder:
         try:
             import torch
 
-            return "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                return "cuda"
+            # Apple Silicon (M-series) GPU. bge-m3 runs several times faster on
+            # MPS than on the CPU, which matters on this CUDA-less Mac.
+            if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+                return "mps"
+            return "cpu"
         except ImportError:
             return "cpu"
 
@@ -279,6 +312,65 @@ class BgeM3Embedder:
         ]
         return self.encode_texts(texts)
 
+    def render_embed_texts(self, docs: Sequence[Document]) -> List[str]:
+        """The exact texts fed to bge-m3 for these documents.
+
+        This is the single source of truth for the content-addressed cache key,
+        so the cache always hashes what the encoder actually sees.
+        """
+        return [
+            d.embed_text(self.cfg.body_char_budget, self.cfg.repeat_title) for d in docs
+        ]
+
+    def encode_documents_cached(
+        self,
+        docs: Sequence[Document],
+        store: "VectorStore",
+        embed_fingerprint: dict,
+        stats: "CacheStats",
+    ) -> np.ndarray:
+        """Encode a batch of documents, reusing content-cached vectors.
+
+        For each document the final rendered embed_text is hashed together with
+        the embedding-config fingerprint into a content key. Keys already in the
+        store are reused; the rest are encoded by bge-m3, stored, and returned.
+        The returned matrix is in row order of ``docs`` (float32, L2-normalised),
+        identical to what ``encode_documents`` would return.
+
+        Distinct rows that render to the *same* text (same key) still each get a
+        row in the output, all pointing at the one cached/encoded vector.
+        """
+        from .vector_store import cache_key as _cache_key
+
+        texts = self.render_embed_texts(docs)
+        keys = [_cache_key(t, embed_fingerprint) for t in texts]
+
+        cached = store.get_many(keys)
+        stats.content_cache_hits += sum(1 for k in keys if k in cached)
+
+        # Encode the unique missing texts once each.
+        miss_key_to_text: dict = {}
+        for k, t in zip(keys, texts):
+            if k not in cached and k not in miss_key_to_text:
+                miss_key_to_text[k] = t
+
+        if miss_key_to_text:
+            miss_keys = list(miss_key_to_text.keys())
+            miss_texts = [miss_key_to_text[k] for k in miss_keys]
+            new_vecs = self.encode_texts(miss_texts)
+            store.put_many(list(zip(miss_keys, new_vecs)))
+            for k, v in zip(miss_keys, new_vecs):
+                cached[k] = np.asarray(v, dtype=np.float32)
+            # misses counts documents (rows) newly required, not unique texts,
+            # so the total (hits + misses) equals len(docs).
+            stats.cache_misses += sum(1 for k in keys if k in miss_key_to_text)
+
+        dim = self.dim if self._dim is not None else next(iter(cached.values())).shape[0]
+        out = np.empty((len(docs), dim), dtype=np.float32)
+        for i, k in enumerate(keys):
+            out[i] = cached[k]
+        return out
+
 
 # ---------------------------------------------------------------------------
 # the resumable pass
@@ -311,6 +403,9 @@ def embed_corpus_resumable(
     max_new_shards: Optional[int] = None,
     time_budget_s: Optional[float] = None,
     progress_cb: Optional[Callable[[int, int, float], None]] = None,
+    prefix_fingerprint_at: Optional[Callable[[int], str]] = None,
+    vector_store_path: Optional[str] = None,
+    cache_stats: "Optional[CacheStats]" = None,
 ) -> EmbedProgress:
     """Embed every manifest row, skipping shards already on disk.
 
@@ -330,14 +425,55 @@ def embed_corpus_resumable(
         manifest_fingerprint,
         len(entries),
         embedding_dim=None,
+        prefix_fingerprint_at=prefix_fingerprint_at,
     )
 
     shards = plan_shards(len(entries), shard_size)
     have = existing_shard_starts(embed_dir)
+
+    # Prefix-extension guard: an existing shard file is only reusable if it
+    # holds exactly the number of rows the *new* shard plan expects at that
+    # offset. When the manifest was extended and the previous last shard was
+    # partial (cached_n not a multiple of shard_size), that boundary shard now
+    # under-covers its new [start, start+shard_size) range; drop it so it is
+    # recomputed with the correct neighbours instead of being trusted blindly.
+    expected_count = {s.start: s.count for s in shards}
+    stale = []
+    for start, path in list(have.items()):
+        if start not in expected_count:
+            stale.append(start)
+            continue
+        try:
+            rows = int(np.load(path, mmap_mode="r").shape[0])
+        except (OSError, ValueError):
+            rows = -1
+        if rows != expected_count[start]:
+            log.warning("[embed] shard at row %d has %d rows but the current plan "
+                        "expects %d; discarding it for recomputation",
+                        start, rows, expected_count[start])
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            del have[start]
+    for start in stale:
+        log.warning("[embed] shard at row %d is outside the current shard plan; "
+                    "leaving it untouched but ignoring it", start)
     todo = [s for s in shards if s.start not in have]
     done_docs = sum(
         min(shard_size, len(entries) - start) for start in have if start < len(entries)
     )
+
+    # Content-addressed cache (sits UNDER the positional shards). Documents in
+    # already-complete shards (Case A) are counted as positional-shard hits and
+    # are NOT looked up in SQLite; only shards we must (re)compute (Case B) go
+    # through the content cache.
+    from .vector_store import CacheStats, VectorStore
+
+    if cache_stats is None:
+        cache_stats = CacheStats()
+    cache_stats.positional_shard_hits += done_docs
+    store = VectorStore(vector_store_path) if vector_store_path else None
 
     log.info(
         "[embed] %d/%d shards already complete (%d/%d documents, %.1f%%)",
@@ -377,7 +513,11 @@ def embed_corpus_resumable(
 
         t0 = time.time()
         docs = list(iter_documents(corpus_root, entries, plan.start, plan.end))
-        vecs = embedder.encode_documents(docs)
+        if store is not None:
+            vecs = embedder.encode_documents_cached(
+                docs, store, embed_fingerprint, cache_stats)
+        else:
+            vecs = embedder.encode_documents(docs)
         if vecs.shape[0] != plan.count:
             raise RuntimeError(
                 f"shard [{plan.start},{plan.end}) produced {vecs.shape[0]} vectors, "
@@ -428,6 +568,11 @@ def embed_corpus_resumable(
     state["shards_complete"] = len(have_after)
     state["complete"] = complete
     _write_state(state_path, state)
+
+    if store is not None:
+        log.info("[embed] content cache now holds %d vector(s)", store.count())
+        store.close()
+    cache_stats.log_summary()
 
     log.info(
         "[embed] pass finished: +%d docs in %.1fs (%.1f docs/s); cache %d/%d shards, complete=%s",
