@@ -1,0 +1,166 @@
+---
+document_id: confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028
+title: 'Scaled Onboarding: First 90→1000 Playbook (2028)'
+author: unknown
+created_at: '2026-04-22T18:24:00'
+updated_at: '2026-04-22T18:24:00'
+source_path: confluence/people-ops/onboarding/dsid_4b1d1d26a4d64f3c9f0702e7b1d2d3ef__scaled-onboarding-first-90-to-1000-playbook-2028.txt
+source_type: text
+tags: []
+---
+
+# Scaled Onboarding: First 90→1000 Playbook (2028)
+
+## Purpose
+This playbook describes a reproducible new-hire experience that helps individuals move from Day 0 to independently delivering measurable impact as the company scales (target milestones: 90 days, 180 days, 12 months). It integrates working-at-Redwood norms, role & career ladder expectations, benefits orientation, hiring handoff details, and the internal tools access matrix required for day-to-day work.
+
+## Scope and Audience
+- Audience: new individual contributors (ICs) and people managers across engineering, product, and go-to-market functions.
+- Scope: onboarding (pre-boarding → first year), manager and buddy responsibilities, benefits orientation, career ladder signposting, required internal tool access, and standard check-ins.
+
+## Outcomes (what success looks like)
+By day 30: core access working, onboarding modules completed, and a written 30–90 plan aligned with manager.
+By day 90: role-level competency demonstrated through a scoped deliverable, functioning local dev/workflow access, and documented feedback from manager + peers.
+By day 180: ownership of a small product/feature area or operational domain; first formal calibration with manager on career trajectory.
+By month 12: clear leveling assessment readiness, repeated cross-functional contributions, and ownership of ownerable metrics.
+
+## High-level timeline and priorities
+1) Pre-boarding (offer → start date)
+   - People Ops: collect payroll and right-to-work details, benefits enrollment links, and background checks (if applicable).
+   - IT: create core accounts (Okta, Google Workspace email/calendar, Slack, Jira, Confluence), assign laptop order, and create initial infra tickets.
+   - Manager: send welcome note with 1-page role context and 30/60/90 expectations.
+2) Day 0–7: orientation and quick wins
+   - Attend Company 101 and Security & Acceptable Use 101.
+   - Complete required compliance e-learning (target: within 5 business days).
+   - Pair with buddy to complete the 'first-commit' path: fork repository, lint, run tests, and open a tiny PR.
+3) Weeks 2–6: ramp and contribution
+   - Deliver a scoped bugfix or small feature.
+   - Weekly 1:1 established; 30/60/90 plan refined.
+4) Days 60–90: ownership and feedback
+   - Present deliverable in team demo.
+   - Formal 90-day check-in documented in Confluence (manager + peer feedback).
+5) 3–12 months: broaden impact and development
+   - Participate in at least one cross-functional project.
+   - Career conversation and leveling calibration at 6 and 12 months.
+
+## Role & Career Ladder Snapshot (quick reference)
+Note: this is a condensed signpost. Full competency matrices live under the Roles & Career space.
+| Level | Typical Title | Expectations (30/90/180) | Example success signal |
+| --- | --- | --- | --- |
+| L1 | Associate IC | 30: environment set up; 90: small feature; 180: reliable completion of assigned tasks | First complete feature merged and validated in production |
+| L2 | IC | 30: codebase fluency; 90: feature ownership; 180: cross-team stakeholder alignment | Leads feature with measurable metric improvement |
+| L3 | Senior IC | 30: design contributions; 90: mentor others; 180: technical leadership in area | Owns roadmap slice and reduces operational toil |
+| L4 | Staff / Principal | 30: influence strategy; 90: cross-team design tradeoffs; 180: long-term system impact | Drives architectural changes, measurable product velocity gains |
+
+## Benefits & Perks Quick Orientation (2028)
+For definitive policy language, see the Benefits page referenced in Related pages.
+- Health: medical, dental, vision (enrollment window: first 30 days).
+- Time off: 22 PTO days prorated first year + national holidays; flexible parental leave (see People Ops benefits page).
+- Stipends: home office ($400 one-time), learning & development ($1,500/yr).
+- Financial: 401(k) matching up to 5% after 60 days.
+- Wellness: mental health platform access from day 1.
+
+Eligibility notes:
+- Equity vesting starts the first full payroll period.
+- Benefit-specific waiting periods are listed on the People Ops benefits landing page.
+
+## Hiring & Onboarding Handoff (recruiter → manager → team)
+Checklist for recruiter at offer acceptance:
+- Offer packet and benefits links sent.
+- Candidate profile and accepted offer committed to ATS with start date and manager contact.
+- Passport of hiring decisions (interview scorecard PDF) attached to candidate record.
+
+Manager tasks (before start date):
+1) Send role context note with: role objectives, top 3 priorities for first 90 days, suggested reading, and the buddy assignment.
+2) Create onboarding hub page in Confluence and add the new hire’s name, calendar invites, and a first-week schedule.
+3) Confirm the access requests that cannot be auto-provisioned (see Internal Tools Access Matrix).
+
+Team tasks (first 48 hours):
+- Welcome channel message in Slack and short ‘meet & greet’ demo slot scheduled.
+- Assign first small ticket with clear acceptance criteria and owner review.
+
+## Manager & Buddy Responsibilities (concise)
+Manager:
+- Prepare 30/60/90 success criteria and share by Day 1.
+- Schedule weekly 1:1 for first 12 weeks.
+- Provide timely feedback and milestones for career calibration.
+- Ensure the new hire is added to the correct Slack channels, Jira projects, and on-call rotations (if applicable).
+
+Buddy:
+- Day-to-day survival guide: runbook for local dev, codebase pointers, and team norms.
+- Serve as first-stop troubleshooting and cultural guide for 90 days.
+
+## Internal Tools Access Matrix (essential items)
+Represented below as a minimal table; working links and Role-Based Access Control (RBAC) templates are in the Internal Tools onboarding page.
+| Tool | Purpose | Default Access (first week) | Action owner |
+| --- | --- | --- | --- |
+| Okta | SSO & identity | Provisioned by IT | IT Ops |
+| Google Workspace | Email + calendar + drive | Auto-provision | IT Ops |
+| Slack | Team comms | Team channels + onboarding channel | Manager |
+| Jira | Issue tracking | Role-based project access | Manager/EngOps |
+| Confluence | Docs & runbooks | Editor on team spaces | Manager |
+| GitHub | Code | Read access by default; write access via manager approval | EngOps |
+| Internal CI / Build | CI visibility | Read by default; execute after approval | Eng SRE |
+| Workday | HR & payroll self-service | Auto-provision after Day 1 payroll sync | People Ops |
+
+Access escalation:
+- When access fails, open an IT Ops ticket (Slack triage channel: #it-ops) with subject: "Access request: <tool> for <name>".
+- Target SLA: 2 business days for standard requests; same business day for urgent access needed for on-call coverage or customer incident response.
+
+## 30/60/90 Planning Template (use this to align expectations)
+1) 30 days (Learn): key stakeholders met, product areas understood, basic dev environment verified, onboarding modules completed.
+2) 60 days (Contribute): first scoped deliverable shipped; feedback integrated.
+3) 90 days (Own): owning a feature or operational workflow with measurable acceptance criteria.
+
+Sample 30–90 objective (paste into Confluence):
+- Objective: Reduce average feature cycle time for team X by 15% for minor user stories.
+- 30d: Map current flow, identify top 3 bottlenecks.
+- 60d: Implement fix for top bottleneck, measure cycle time.
+- 90d: Iterate on follow-ups and document playbook for team.
+
+## Career Development and Calibration
+- Quarterly calibration: manager compiles evidence and growth markers; People Ops coordinates cross-team calibration cycles.
+- Learning plan: use L&D stipend within first 90 days; submit course plan in Confluence for approval.
+- Mentorship: pair new hires with a mentor (different from buddy) in month 2 for career coaching.
+
+## Manager First-90 Checklist (actionable)
+- Offer acceptance: confirm start logistics, send equipment request.
+- Preboarding: set up accounts and add calendar invites for Company 101, Security & Acceptable Use 101, and Team Orientation.
+- Day 1: share 30/60/90 doc and immediate priorities.
+- Week 2: confirm access is complete for day-to-day work; fix any blockers.
+- Weekly: track deliverables, unblock risks, provide written feedback each 30 days.
+- 30-day pulse: ensure the new hire completes a short onboarding pulse survey (People Ops sends link).
+- 90-day review: document outcome (strengths, blockers, next goals) and submit form to People Ops.
+
+## Typical Risk & Escalation Paths
+- Access delays: escalate to IT Ops manager and copy People Ops if access is blocking onboarding milestones.
+- Role clarity issues: immediate 1:1 + updated role brief; if unresolved, involve chapter lead.
+- Performance concerns within first 90 days: follow the Performance Improvement primer with People Ops involvement.
+
+## Templates and Artifacts (appendix)
+- 30/60/90 Plan template: copyable Confluence template link (search: "30-60-90-template").
+- Manager review form: submit via People Ops Intake (search: "People Ops intake").
+- New hire Slack announcement template: short paragraph with role, start date, and 1-line ask.
+
+## Measurement and Continuous Improvement
+We track onboarding quality via:
+- Time-to-first-commit
+- Time-to-merge-for-first-feature
+- Time-to-first-production-deploy (where applicable)
+- New-hire Net Promoter Score (nhNPS) at day 30/90
+- First-90 retention
+
+People Ops reviews trends quarterly with functional leaders and updates this playbook accordingly.
+
+## Related pages and resources
+- Benefits at Redwood (2028): see related pages.
+- Full competency matrices and leveling rubric: Roles & Career space.
+- Internal tools onboarding and RBAC templates: Internal Tools space.
+- Security training and acceptable use: Security & Compliance space.
+
+## Revision history
+- 2028-01-22: Ported and refreshed from the 2027 playbook; aligned structure to People Ops onboarding hub.
+- 2028-02-14: Updated benefits highlights (PTO, stipends, 401(k) match) and added Workday provisioning notes.
+- 2028-03-05: Updated IT access SLA targets and GitHub default access policy; added time-to-first-production-deploy metric.
+
+If you have suggestions, raise a PR on this Confluence doc or contact the People Ops owner (Asha Patel).
