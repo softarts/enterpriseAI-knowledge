@@ -1,0 +1,73 @@
+{
+  "L1": 0.473086,
+  "L2": 0.441168,
+  "L3": 0.450724,
+  "method_used": {
+    "L1": "gmm",
+    "L2": "gmm",
+    "L3": "gmm"
+  },
+  "diagnostics": {
+    "L1": {
+      "method": "gmm",
+      "reason": "two well-separated components; threshold = midpoint of means",
+      "n_samples": 50000,
+      "gmm_means": [
+        0.4542175855172545,
+        0.49195385824302257
+      ],
+      "gmm_weights": [
+        0.49491099694534535,
+        0.5050890030546547
+      ],
+      "gmm_stds": [
+        0.032112742574934044,
+        0.03321497949531352
+      ],
+      "separation": 1.155126838079845,
+      "percentile_used": null
+    },
+    "L2": {
+      "method": "gmm",
+      "reason": "two well-separated components; threshold = midpoint of means",
+      "n_samples": 50000,
+      "gmm_means": [
+        0.397200571133175,
+        0.48513522878099646
+      ],
+      "gmm_weights": [
+        0.5771496318785582,
+        0.4228503681214418
+      ],
+      "gmm_stds": [
+        0.033041448634013364,
+        0.03823255950449536
+      ],
+      "separation": 2.4609910868747336,
+      "percentile_used": null
+    },
+    "L3": {
+      "method": "gmm",
+      "reason": "two well-separated components; threshold = midpoint of means",
+      "n_samples": 50000,
+      "gmm_means": [
+        0.3970124666006058,
+        0.5044364603236137
+      ],
+      "gmm_weights": [
+        0.5789543723611715,
+        0.4210456276388285
+      ],
+      "gmm_stds": [
+        0.03521871035105823,
+        0.04303589613226214
+      ],
+      "separation": 2.731902752017033,
+      "percentile_used": null
+    }
+  },
+  "generated_at": "2026-08-30T22:05:30",
+  "n_documents": 50000,
+  "embedding_model": "BAAI/bge-m3",
+  "max_seq_length": 512
+}

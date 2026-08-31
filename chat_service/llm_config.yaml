@@ -1,0 +1,21 @@
+# LLM configuration for chat_service.
+#
+# IMPORTANT: api_key must reference an ENVIRONMENT VARIABLE using ${VAR} syntax,
+# never a literal token. The value below resolves to the HF_TOKEN environment
+# variable at runtime, so the real secret is never committed to the repo.
+#
+# Any ${VAR} placeholder in this file is substituted with the value of that
+# environment variable when the config is loaded (see chat_service/config.py).
+
+provider: huggingface
+
+# HF model id.
+model: openai/gpt-oss-120b
+
+# Reference to the environment variable holding the token (NOT the token itself).
+api_key: ${HF_TOKEN}
+
+# Max tokens for the LLM response. See README "Why limit max_tokens" — this caps
+# the *completion* length only; the prompt is unaffected. Raise it if answers get
+# truncated (finish_reason == "length").
+max_tokens: 512

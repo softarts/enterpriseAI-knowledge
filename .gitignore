@@ -1,0 +1,24 @@
+enterpriseag-bench_all_documents/
+*.pyc
+*.zip
+
+
+# Chroma persistent vector store
+vector_db/
+.__tmp_chroma_probe/
+
+# chat_service frontend (React + Vite)
+chat_service/frontend/node_modules/
+chat_service/frontend/dist/
+env.bat
+.DS_Store
+*.npy
+kb_classifier_bootstrap/work/**
+kb_classifier_bootstrap/work/embeddings/shard_000000000.npy
+kb_classifier_bootstrap/work/embeddings/shard_000000000.npy
+kb_classifier_bootstrap/work/embeddings/shard_000000000.npy
+__MACOSX/
+kb_classifier/work/
+embedding/
+all_documents/
+generated

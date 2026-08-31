@@ -1,0 +1,23 @@
+---
+title: Development Standards and Best Practices
+author: Engineering Team
+created_at: '2026-06-01T14:30:00'
+tags:
+- engineering
+- standards
+source_path: engineering/development_standard.pdf
+---
+
+# Development Standards and Best Practices
+
+## Code Review Process
+
+All code changes must go through peer review before merging. At least one approval is required for feature branches. Critical path changes require two approvals.
+
+## Testing Requirements
+
+Unit test coverage must be maintained above 80%. Integration tests are required for all API endpoints. End-to-end tests are required for critical user flows.
+
+## Deployment Process
+
+All deployments follow the blue-green deployment strategy. Rollback procedures must be documented and tested quarterly.
