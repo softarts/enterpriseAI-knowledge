@@ -11,7 +11,9 @@ The token is read from the environment only; it is never logged, hardcoded,
 or returned to the frontend.
 """
 
-from typing import Any, Dict, List
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
 
 from huggingface_hub import InferenceClient
 

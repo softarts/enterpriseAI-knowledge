@@ -1,12 +1,15 @@
 import { useState } from "react";
 import Layout from "./components/Layout.jsx";
 import ChatWindow from "./components/ChatWindow.jsx";
+import ImportPage from "./components/ImportPage.jsx";
 import { askQuestion } from "./api/chatApi.js";
 
-// Top-level state: messages, loading, latest trace, and pane collapse flags.
-// Kept intentionally simple (no router, no store) for the v1 playground shell.
+// Top-level state: active view, messages, loading, trace, pane collapse.
+// Kept intentionally simple: no router, no store.
 
 export default function App() {
+  const [activeView, setActiveView] = useState("chat");
+
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [trace, setTrace] = useState(null);
@@ -53,8 +56,15 @@ export default function App() {
       traceCollapsed={traceCollapsed}
       onToggleTrace={() => setTraceCollapsed((v) => !v)}
       trace={trace}
+      activeView={activeView}
+      onViewChange={setActiveView}
+      showTrace={activeView === "chat"}
     >
-      <ChatWindow messages={messages} loading={loading} onSend={handleSend} />
+      {activeView === "chat" ? (
+        <ChatWindow messages={messages} loading={loading} onSend={handleSend} />
+      ) : (
+        <ImportPage />
+      )}
     </Layout>
   );
 }

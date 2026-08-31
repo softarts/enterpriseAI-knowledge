@@ -13,9 +13,11 @@ to change for that — retrieval simply adds a step. It is intentionally NOT
 implemented here.
 """
 
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from chat_service.config import settings
 from chat_service.llm.hf_client import HFTokenMissingError, HuggingFaceLLM

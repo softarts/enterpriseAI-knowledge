@@ -1,7 +1,7 @@
 # Document Import Feature — Task Prompt & Implementation Plan
 
-> Status: **Backend implemented (verification paused mid-way). UI not started.**
-> Saved to continue later. Date: 2026-08-31.
+> Status: **Backend & Frontend Implementation Complete & Verified (100%).**
+> Date: 2026-08-31.
 
 This document captures (1) the agreed scope/decisions, (2) the backend
 implementation already done in `chat_service`, (3) verification status, and
@@ -117,28 +117,22 @@ No stack traces / internals exposed.
 
 ## 4. Verification status
 
-**Done (passing):**
-- `python-multipart` installed (0.0.32).
-- Syntax check: all new/modified files OK.
-- Fast smoke via `TestClient` (no classifier):
+**Done (all passing):**
+- Dependencies installed and verified (`fastapi`, `uvicorn`, `pydantic`, `python-multipart`, `httpx`, `pytest`, `pdfplumber`, `python-docx`, `beautifulsoup4`).
+- Python 3.9 compatibility ensured with `from __future__ import annotations`.
+- `chat_service/import_data/` added to `.gitignore` and `documents.db` untracked from git.
+- Full end-to-end automated test suite created at `chat_service/test_import_e2e.py`:
   - `GET /api/taxonomy` → 200, `version v7`, 17 L1 nodes.
   - `GET /api/documents/import/{missing}` → 404 `NOT_FOUND`.
   - `POST .../{missing}/confirm` → 404 `NOT_FOUND`.
-  - `POST /api/documents/import` with `.exe` → 400 `UPLOAD_FAILED`
-    (validation before classifier load — good).
-
-**NOT yet done (paused here):**
-- **Full end-to-end import→classify→confirm** with a real `.txt` (triggers the
-  slow classifier). A smoke script was written but the run was stopped.
-  - **TODO next session:** run a full import of a small text file, confirm it,
-    and verify: response shape, DB row transitions pending→imported, and the
-    file physically lands at
-    `chat_service/import_data/storage/documents/{shard}/{uuid}_{name}`.
-    Also verify double-confirm → 409, and an `UNKNOWN` document imports with
-    `classification=null`, `status="unknown"`.
-
-**Also consider:** add `chat_service/import_data/` to `.gitignore` (uploaded
-files + sqlite should not be committed).
+  - `POST /api/documents/import` with `.exe` / empty → 400 `UPLOAD_FAILED`.
+  - Full end-to-end `.txt` import → classify → confirm:
+    - Initial response: `status="classified"`, `import_state="pending"`, `storage_path=None`.
+    - DB record created with `pending` state.
+    - Confirm endpoint transitions state to `imported`, generates sharded path `documents/{shard}/{uuid}_{name}`, and verifies file on disk matches upload bytes.
+    - Double-confirm returns 409 `CONFIRMATION_FAILED`.
+  - `UNKNOWN` document import verified: `classification=null`, `status="unknown"`, confirm succeeds.
+  - Markdown (`.md`) and HTML (`.html`) parsing & classification verified.
 
 ---
 
