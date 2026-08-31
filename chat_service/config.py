@@ -23,12 +23,21 @@ Environment Variables:
     CHAT_PORT           - Port for the API (default: 8100).
     CHAT_CORS_ORIGINS   - Comma-separated allowed origins for CORS
                           (default: http://localhost:5173,http://127.0.0.1:5173).
+
+Document Import (MVP, single-file, synchronous):
+    CHAT_IMPORT_DB          - Path to the import metadata SQLite file
+                              (default: chat_service/import_data/documents.db).
+    CHAT_IMPORT_STORAGE_DIR - Root for finalized original files
+                              (default: chat_service/import_data/storage).
+    CHAT_IMPORT_TEMP_DIR    - Root for pending uploads awaiting confirmation
+                              (default: chat_service/import_data/temp).
+    CHAT_IMPORT_MAX_MB      - Max upload size in MB (default: 25).
 """
 
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 import yaml
 
@@ -91,6 +100,25 @@ class Settings:
         self.cors_origins: List[str] = [
             o.strip() for o in origins.split(",") if o.strip()
         ]
+
+        # --- Document Import (MVP: single-file, synchronous) ---
+        _import_root = Path(__file__).resolve().parent / "import_data"
+        self.import_db_path: Path = Path(
+            os.environ.get("CHAT_IMPORT_DB", str(_import_root / "documents.db"))
+        )
+        self.import_storage_dir: Path = Path(
+            os.environ.get("CHAT_IMPORT_STORAGE_DIR", str(_import_root / "storage"))
+        )
+        self.import_temp_dir: Path = Path(
+            os.environ.get("CHAT_IMPORT_TEMP_DIR", str(_import_root / "temp"))
+        )
+        self.import_max_bytes: int = (
+            int(os.environ.get("CHAT_IMPORT_MAX_MB", "25")) * 1024 * 1024
+        )
+        # Extensions accepted for import (matches the reused parser's support).
+        self.import_allowed_extensions: Set[str] = {
+            ".pdf", ".docx", ".doc", ".html", ".htm", ".txt", ".md", ".rst",
+        }
 
     @staticmethod
     def _extract_token_env_var(cfg: Dict[str, Any]) -> str:
