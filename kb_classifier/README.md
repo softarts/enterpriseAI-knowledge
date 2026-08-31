@@ -99,15 +99,22 @@ config/thresholds.json   +  bootstrap_report_v<N>_<时间戳>.md  +  work/snapsh
 
 ### 2.4 三级分类在代码里是怎么做到的
 
-「三级」不是把一个 flat 分类器叠三次，而是**逐级、限定父节点范围的 argmax**（`matching.match_hierarchical`，第 66 行）：
+分类采用 **全局最优有效路径匹配（Global Leaf-First Path Matching，方案 A）**（`common.matching.match_hierarchical`）：
 
-1. **L1**：文档向量对所有 L1 锚点求余弦 argmax，得到最佳 L1 及其分数。
-2. **L2**：**只在所选 L1 的直接子节点**里求 argmax（不是对全部 65 个 L2）。这靠 `anchors.children_index`（第 93 行）建立的 `parent_key → 子锚点行` 映射实现——`None → L1 行`。好处有二：更省算力（只点积少数子锚点），更正确（不同 L1 下同名兄弟节点如 `Treasury > Cash Management` vs `Corporate Banking > Cash Management Services` 不会互相污染）。
-3. **L3**：同理，只在所选 L2 的子节点里 argmax。
+**背景与算法演进**：
+早期版本采用自顶向下贪心匹配（L1 argmax → 选定 L1 下 L2 argmax → 选定 L2 下 L3 argmax）。但实际业务语料中，L1 作为高度抽象的总类（如 `Human Resources` 与 `Product Management`），文档中的通用管理词汇会导致各 L1 在首层的余弦相似度仅相差微弱的统计噪声（如 `0.4781` vs `0.4743`），贪心决策易过早锁死错误分支，导致高语义细粒度的 L3 真实最优解（如 `0.6105`）被遗漏。
 
-锚点文本用 `"<面包屑>: <desc>"`（`anchors.anchor_text`，第 78 行），让面包屑帮同名兄弟消歧。全程按文档分批（默认每批 5 万篇），绝不物化 `[n_docs × n_anchors]` 之外更大的中间矩阵。
+**当前实现流程**：
+1. **构建全局叶子路径**：在扁平化 Anchor 树时，提取全部分类树的合法叶子路径 $P_i = (L1, L2, L3)$。
+2. **全局批量点积**：对每批文档矩阵直接计算与全部 297 个 Anchor 的余弦点积 `sims = batch @ anchor_vecs.T`。
+3. **叶子优先最优路径选取**：提取所有 L3 叶子节点的相似度 `leaf_sims`，每篇文档选取全局得分最高的合法叶子节点作为候选，并回溯其绑定的父节点（L2）和祖父节点（L1），提取各级匹配得分。
+4. **逐级阈值判定（`_apply_thresholds`）**：
+   - 三级均过阈值（$L1 \ge t_1, L2 \ge t_2, L3 \ge t_3$）→ 判定为 `ASSIGNED` 完整三级分类；
+   - $L1/L2$ 过但 $L3$ 欠阈值 → `PARTIAL`（截断至 L2）；
+   - $L1$ 过但 $L2$ 欠阈值 → `PARTIAL`（截断至 L1）；
+   - $L1$ 欠阈值时，自动触发 **Deep Fallback**：若任意 $L2$ 或 $L3$ 节点独立超过自身阈值，则保留其完整祖先链路，赋予 `FALLBACK` 状态；若均未过阈值则归入 `UNKNOWN`。
 
-**分类的判定（过/欠阈值）**发生在 discovery 阶段（`discovery.build_unassigned_pools`，第 69 行）：每篇欠阈值文档被归入**恰好一个**池，池键 `(level, parent_key)` = 它「最高的那个失败层级」——L1 就没过的进 `(1, None)`；过了 L1 但 L2 没过的进 `(2, <L1 key>)`；L1/L2 都过但 L3 没过的进 `(3, <L2 key>)`。这保证发现的新节点挂在正确的分支下。
+锚点文本包含 `"<面包屑>: <desc>"`（`anchors.anchor_text`），使每个叶子 Anchor 自身即具备全局语境消歧能力。全流程支持矩阵批量处理（默认每批 5 万篇）。
 
 ---
 
@@ -224,9 +231,23 @@ effective_pool_size = min(pool_size, max_pool_for_clustering)   # 默认上限 2
 - `children_index()`（第 93 行）：`parent_key → 子锚点行`（`None → L1`），逐级匹配的关键。
 - `embed_anchors()`（第 115 行）：向量化所有锚点，缓存到 `work/anchor_embeddings.npz`，键为锚点文本 + embedding 设置指纹（改 taxonomy 会透明重建）。
 
-### `bootstrap/matching.py` — 逐级锚点匹配
-- `match_hierarchical()`（第 66 行）：逐篇 L1→L2→L3 余弦 argmax，L2/L3 限定在所选父节点子范围；按文档分批。余弦 = 点积（第 59 行）。
+### `common/matching.py` — 全局最优叶子路径匹配（方案 A）
+- `match_hierarchical()`（第 66 行）：提取全量合法叶子路径，批量矩阵乘法一次性求出全部 Anchor 相似度，全局最优选取 L3 叶子节点并绑定回溯 L2/L1 祖先路径。
 - `level_scores()`（第 138 行）抽取每级最高分供定阈值；`save_match_results()`（第 146 行）落盘 `work/match_results.npz`。
+
+### `test_classifier_regression.py` — 分类器回归测试套件
+- 每次修改 `kb_classifier` 必须运行此测试进行回归：
+  ```bash
+  python3 -m pytest kb_classifier/test_classifier_regression.py
+  # 或：
+  python3 -m kb_classifier.test_classifier_regression
+  ```
+- 覆盖测试用例：
+  1. `test_people_ops_offer_playbook_regression`: 验证 Offer 评分与 Onboarding Playbook 正确分类至 `Human Resources > Recruitment > Offers & Hiring Decisions`（避免贪心 L1 误分类）；
+  2. `test_tech_infrastructure_document`: 验证 SRE/K8s 技术基础设施文档分类至 `Technology & Engineering`；
+  3. `test_risk_compliance_aml_document`: 验证反洗钱/KYC 政策分类至 `Risk & Compliance`；
+  4. `test_gibberish_unknown_document`: 验证无意义乱码文档正确触发 `UNKNOWN`（depth=0）；
+  5. `test_hierarchical_path_consistency`: 验证分类输出严格满足父子拓扑合法性（L2 为 L1 子节点，L3 为 L2 子节点）。
 
 ### `bootstrap/thresholds.py` — 每级阈值
 - `fit_threshold()`（第 56 行）：拟合二分量 GMM（`GaussianMixture`，第 85 行），阈值取两均值中点；双护栏（分离度 < 1.0 合并标准差、或某分量权重 < 0.05）触发 P30 回退；样本 < 50 直接 P30；结果钳到 `[0.15, 0.80]`。返回含完整诊断的 `ThresholdResult`（第 37 行）。

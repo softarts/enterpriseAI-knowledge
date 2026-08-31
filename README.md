@@ -571,10 +571,10 @@ python -m chat_service.run
 一篇文档 (title, body)
   ↓  BGE-M3 编码（与阶段 A 相同的 embed 渲染：title 加权 + 截断）
 文档向量 (L2 归一化)
-  ↓  match_hierarchical：逐级取最近 anchor（L1→L2→L3 argmax）
+  ↓  match_hierarchical：全局叶子路径最优匹配（L3 最优并回溯 L2/L1）
 每级 (key, score)
   ↓  读 thresholds.json，逐级阈值判定：
-      L1 分数 < 阈值        → UNKNOWN（无路径）
+      L1 分数 < 阈值        → 触发 Deep Fallback（若 L2/L3 过阈值则为 FALLBACK，否则 UNKNOWN）
       L1 过、L2 分数 < 阈值 → PARTIAL（截到 L1）
       L1L2 过、L3 < 阈值    → PARTIAL（截到 L2）
       三级都过             → ASSIGNED（完整 L1>L2>L3）
@@ -584,7 +584,7 @@ metadata 过滤 + 混合检索
 ```
 
 **冻结版本**：分类器默认锁定生产 taxonomy 版本
-`PINNED_TAXONOMY_VERSION = 6`（→ `config/taxonomy_v6_50k.py`），
+`PINNED_TAXONOMY_VERSION = 7`（→ `config/taxonomy_v7.py`），
 不会随阶段 A 每轮生成而漂移。要升级生产版本，只改这一个常量；用
 `--taxonomy-version` 可临时覆盖。
 
@@ -592,19 +592,19 @@ metadata 过滤 + 混合检索
 
 | 步骤 | 符号 | 文件:行号 |
 |---|---|---|
-| 冻结的生产版本号 | `PINNED_TAXONOMY_VERSION = 6` | `kb_classifier/taxonomy_classifier/classify.py:73` |
-| 分类器（构造即就绪，可复用） | `class TaxonomyClassifier` | `kb_classifier/taxonomy_classifier/classify.py:136` |
-| 加载 taxonomy + 阈值 + anchor 向量 | `TaxonomyClassifier.__init__` | `kb_classifier/taxonomy_classifier/classify.py:147` |
-| 逐级阈值判定 → status | `_apply_thresholds` | `kb_classifier/taxonomy_classifier/classify.py:196` |
-| 向量批分类（match_hierarchical） | `classify_vectors` | `kb_classifier/taxonomy_classifier/classify.py:225` |
-| 文档批分类（先编码后分类） | `classify_documents` | `kb_classifier/taxonomy_classifier/classify.py:230` |
-| 单篇 (title, body) 分类 | `classify_text` | `kb_classifier/taxonomy_classifier/classify.py:237` |
-| 生成 OKF metadata | `Classification.to_okf_metadata` | `kb_classifier/taxonomy_classifier/classify.py:112` |
-| 批量入库 → jsonl（doc_id→路径） | `classify_corpus` | `kb_classifier/taxonomy_classifier/classify.py:261` |
+| 冻结的生产版本号 | `PINNED_TAXONOMY_VERSION = 7` | `kb_classifier/taxonomy_classifier/classify.py:73` |
+| 分类器（构造即就绪，可复用） | `class TaxonomyClassifier` | `kb_classifier/taxonomy_classifier/classify.py:137` |
+| 加载 taxonomy + 阈值 + anchor 向量 | `TaxonomyClassifier.__init__` | `kb_classifier/taxonomy_classifier/classify.py:148` |
+| 逐级阈值判定 → status | `_apply_thresholds` | `kb_classifier/taxonomy_classifier/classify.py:203` |
+| 向量批分类（match_hierarchical） | `classify_vectors` | `kb_classifier/taxonomy_classifier/classify.py:300` |
+| 文档批分类（先编码后分类） | `classify_documents` | `kb_classifier/taxonomy_classifier/classify.py:328` |
+| 单篇 (title, body) 分类 | `classify_text` | `kb_classifier/taxonomy_classifier/classify.py:340` |
+| 生成 OKF metadata | `Classification.to_okf_metadata` | `kb_classifier/taxonomy_classifier/classify.py:113` |
+| 回归测试套件 | `test_classifier_regression` | `kb_classifier/test_classifier_regression.py` |
 | 冻结版本解析（pin/latest/seed） | `load_current_taxonomy` | `kb_classifier/config/taxonomy_current.py:88` |
-| 逐级最近 anchor 匹配 | `match_hierarchical` | `kb_classifier/common/matching.py` |
+| 全局叶子最优路径匹配 | `match_hierarchical` | `kb_classifier/common/matching.py:66` |
 | taxonomy 展平为 anchors | `flatten_taxonomy` / `embed_anchors` | `kb_classifier/common/anchors.py` |
-| 向后兼容别名 | `Classifier = TaxonomyClassifier` | `kb_classifier/taxonomy_classifier/classify.py:248` |
+| 向后兼容别名 | `Classifier = TaxonomyClassifier` | `kb_classifier/taxonomy_classifier/classify.py:353` |
 
 ### 实验：分类一个文件
 

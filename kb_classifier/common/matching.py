@@ -70,59 +70,56 @@ def match_hierarchical(
     *,
     doc_batch: int = DOC_BATCH,
 ) -> List[MatchResult]:
-    """Assign every document a full L1->L2->L3 path with per-level scores."""
+    """Assign every document a full L1->L2->L3 path with per-level scores.
+
+    Global Path Matching (方案 A):
+    Instead of myopic top-down greedy search (which can commit to a suboptimal L1
+    branch when L1 abstract similarity scores differ by only statistical noise),
+    we evaluate valid complete leaf paths across the taxonomy tree and select the
+    path that maximizes the leaf (L3) anchor similarity. The corresponding parent
+    (L2) and grandparent (L1) nodes form the full hierarchical path.
+    """
     kids = children_index(anchors)
-    l1_rows = kids.get(None, [])
-    if not l1_rows:
-        raise ValueError("no L1 anchors found; taxonomy appears empty")
+    row_by_key = {a.key: i for i, a in enumerate(anchors)}
+
+    # Collect all leaf nodes (anchors with no children) and their ancestor rows.
+    leaf_paths = []
+    for i, a in enumerate(anchors):
+        if not kids.get(a.key):
+            r1 = row_by_key.get(a.path_keys[0], -1) if len(a.path_keys) >= 1 else -1
+            r2 = row_by_key.get(a.path_keys[1], -1) if len(a.path_keys) >= 2 else -1
+            r3 = row_by_key.get(a.path_keys[2], -1) if len(a.path_keys) >= 3 else -1
+            leaf_paths.append((i, r1, r2, r3, a))
+
+    if not leaf_paths:
+        raise ValueError("no leaf anchors found; taxonomy appears empty")
+
+    leaf_rows = np.array([p[0] for p in leaf_paths], dtype=np.int64)
 
     n = doc_vecs.shape[0]
     results: List[MatchResult] = [None] * n  # type: ignore
 
-    log.info("[match] matching %d documents against %d anchors (%d L1) in batches of %d",
-             n, len(anchors), len(l1_rows), doc_batch)
+    log.info("[match] matching %d documents against %d leaf paths (%d anchors total) in batches of %d",
+             n, len(leaf_paths), len(anchors), doc_batch)
 
     for start in range(0, n, doc_batch):
         end = min(start + doc_batch, n)
         batch = doc_vecs[start:end]                    # [b, dim]
 
-        # L1: global argmax over the L1 anchors.
-        l1_best, l1_score = _argmax_within(batch, anchor_vecs, l1_rows)
-
-        # L2 / L3 depend on the chosen parent, which differs per document. Group
-        # rows by their chosen parent key so each group does one matmul.
-        l2_best = np.full(end - start, -1, dtype=np.int64)
-        l2_score = np.full(end - start, -np.inf, dtype=np.float32)
-        for l1_key in np.unique([anchors[r].key for r in l1_best]):
-            member_mask = np.array([anchors[r].key == l1_key for r in l1_best])
-            member_idx = np.nonzero(member_mask)[0]
-            l2_rows = kids.get(l1_key, [])
-            rows, scores = _argmax_within(batch[member_idx], anchor_vecs, l2_rows)
-            l2_best[member_idx] = rows
-            l2_score[member_idx] = scores
-
-        l3_best = np.full(end - start, -1, dtype=np.int64)
-        l3_score = np.full(end - start, -np.inf, dtype=np.float32)
-        chosen_l2_keys = [anchors[r].key if r >= 0 else None for r in l2_best]
-        for l2_key in {k for k in chosen_l2_keys if k is not None}:
-            member_mask = np.array([k == l2_key for k in chosen_l2_keys])
-            member_idx = np.nonzero(member_mask)[0]
-            l3_rows = kids.get(l2_key, [])
-            rows, scores = _argmax_within(batch[member_idx], anchor_vecs, l3_rows)
-            l3_best[member_idx] = rows
-            l3_score[member_idx] = scores
+        # Compute full cosine similarity matrix for the batch against all anchors.
+        sims = batch @ anchor_vecs.T                   # [b, n_anchors]
+        leaf_sims = sims[:, leaf_rows]                 # [b, n_leaves]
+        best_leaf_idx = np.argmax(leaf_sims, axis=1)   # [b]
 
         for j in range(end - start):
-            r1 = int(l1_best[j])
-            r2 = int(l2_best[j])
-            r3 = int(l3_best[j])
+            r_leaf, r1, r2, r3, _ = leaf_paths[best_leaf_idx[j]]
             results[start + j] = MatchResult(
-                l1_key=anchors[r1].key,
-                l1_score=float(l1_score[j]),
+                l1_key=anchors[r1].key if r1 >= 0 else None,
+                l1_score=float(sims[j, r1]) if r1 >= 0 else float("nan"),
                 l2_key=anchors[r2].key if r2 >= 0 else None,
-                l2_score=float(l2_score[j]) if r2 >= 0 else float("nan"),
+                l2_score=float(sims[j, r2]) if r2 >= 0 else float("nan"),
                 l3_key=anchors[r3].key if r3 >= 0 else None,
-                l3_score=float(l3_score[j]) if r3 >= 0 else float("nan"),
+                l3_score=float(sims[j, r3]) if r3 >= 0 else float("nan"),
             )
 
         log.info("[match]   matched rows [%d,%d)", start, end)
