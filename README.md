@@ -558,6 +558,217 @@ python -m chat_service.run
 
 ---
 
+## Taxonomy Classifier（逐篇分类器 / kb_classifier 阶段 B）
+
+`kb_classifier/taxonomy_classifier/`（原 `stage_b`）是 KB 分类流水线的**稳态、
+生产 API**：给一篇（或一批）文档打上三级 taxonomy 路径。它在**文档导入时**被调用，
+只读消费阶段 A 冻结产物（taxonomy + thresholds），**不聚类、不调用 LLM**，每篇只做
+几次点积，因此足够便宜可内联到导入流程里。
+
+### 流程说明
+
+```
+一篇文档 (title, body)
+  ↓  BGE-M3 编码（与阶段 A 相同的 embed 渲染：title 加权 + 截断）
+文档向量 (L2 归一化)
+  ↓  match_hierarchical：逐级取最近 anchor（L1→L2→L3 argmax）
+每级 (key, score)
+  ↓  读 thresholds.json，逐级阈值判定：
+      L1 分数 < 阈值        → UNKNOWN（无路径）
+      L1 过、L2 分数 < 阈值 → PARTIAL（截到 L1）
+      L1L2 过、L3 < 阈值    → PARTIAL（截到 L2）
+      三级都过             → ASSIGNED（完整 L1>L2>L3）
+  ↓
+OKF 分类 metadata（路径 keys/names + 每级分数 + status），供下游 RAG 做
+metadata 过滤 + 混合检索
+```
+
+**冻结版本**：分类器默认锁定生产 taxonomy 版本
+`PINNED_TAXONOMY_VERSION = 6`（→ `config/taxonomy_v6_50k.py`），
+不会随阶段 A 每轮生成而漂移。要升级生产版本，只改这一个常量；用
+`--taxonomy-version` 可临时覆盖。
+
+### 涉及的代码（文件:行号）
+
+| 步骤 | 符号 | 文件:行号 |
+|---|---|---|
+| 冻结的生产版本号 | `PINNED_TAXONOMY_VERSION = 6` | `kb_classifier/taxonomy_classifier/classify.py:73` |
+| 分类器（构造即就绪，可复用） | `class TaxonomyClassifier` | `kb_classifier/taxonomy_classifier/classify.py:136` |
+| 加载 taxonomy + 阈值 + anchor 向量 | `TaxonomyClassifier.__init__` | `kb_classifier/taxonomy_classifier/classify.py:147` |
+| 逐级阈值判定 → status | `_apply_thresholds` | `kb_classifier/taxonomy_classifier/classify.py:196` |
+| 向量批分类（match_hierarchical） | `classify_vectors` | `kb_classifier/taxonomy_classifier/classify.py:225` |
+| 文档批分类（先编码后分类） | `classify_documents` | `kb_classifier/taxonomy_classifier/classify.py:230` |
+| 单篇 (title, body) 分类 | `classify_text` | `kb_classifier/taxonomy_classifier/classify.py:237` |
+| 生成 OKF metadata | `Classification.to_okf_metadata` | `kb_classifier/taxonomy_classifier/classify.py:112` |
+| 批量入库 → jsonl（doc_id→路径） | `classify_corpus` | `kb_classifier/taxonomy_classifier/classify.py:261` |
+| 冻结版本解析（pin/latest/seed） | `load_current_taxonomy` | `kb_classifier/config/taxonomy_current.py:88` |
+| 逐级最近 anchor 匹配 | `match_hierarchical` | `kb_classifier/common/matching.py` |
+| taxonomy 展平为 anchors | `flatten_taxonomy` / `embed_anchors` | `kb_classifier/common/anchors.py` |
+| 向后兼容别名 | `Classifier = TaxonomyClassifier` | `kb_classifier/taxonomy_classifier/classify.py:248` |
+
+### 实验：分类一个文件
+
+先决条件：阶段 A 产物已存在（`config/taxonomy_v6_50k.py`、`config/thresholds.json`、
+anchor 向量缓存）。首次运行会下载 BGE-M3 模型（约 2GB，一次性；设置 `HF_TOKEN`
+可加速）。
+
+```bash
+# 单篇：从 .txt 文件（首个非空行=title，其余=body）
+python -m kb_classifier.taxonomy_classifier.classify file "all_documents\confluence\company-handbook\dsid_9922ca0efee74e4fabcd4c4bab756ad6__career-neighborhoods-and-benefits-playbook-2027.txt"
+
+# 单篇：直接给 title/body
+python -m kb_classifier.taxonomy_classifier.classify text --title "Compliance evidence bundle" --body "The manifest must contain evidence_id, time_window, signing_key_id, signature ..."
+
+# 临时用别的 taxonomy 版本
+python -m kb_classifier.taxonomy_classifier.classify file <path> --taxonomy-version 5
+```
+
+初始化日志（已验证）：
+
+```
+[taxonomy] pinned taxonomy = taxonomy_v6_50k.py
+[anchors] loaded 351 cached anchor vectors from kb_classifier/work/anchor_embeddings.npz
+[taxonomy_classifier] ready: taxonomy=taxonomy_v6_50k.py (351 anchors),
+                      thresholds L1=0.4731 L2=0.4412 L3=0.4507
+[embed] loading BAAI/bge-m3 on cpu ...
+```
+
+输出为一条 OKF 分类 metadata（`to_okf_metadata` 的结构）：
+
+```json
+{
+  "classification_status": "ASSIGNED",
+  "classification_depth": 3,
+  "category_path_keys": ["<l1_key>", "<l2_key>", "<l3_key>"],
+  "category_path_names": ["<L1 名称>", "<L2 名称>", "<L3 名称>"],
+  "category_breadcrumb": "<L1> > <L2> > <L3>",
+  "level_scores": { "L1": 0.6xx, "L2": 0.5xx, "L3": 0.5xx },
+  "l1_key": "<l1_key>", "l2_key": "<l2_key>", "l3_key": "<l3_key>"
+}
+```
+
+`status` 三种取值：`ASSIGNED`（三级齐全）、`PARTIAL`（截断在 L1 或 L2）、
+`UNKNOWN`（连 L1 阈值都没过）。
+
+### 批量入库（doc_id → 分类路径 映射）
+
+```bash
+# 对 manifest 里所有文档逐篇打标，落一份 jsonl（每行一篇）
+python -m kb_classifier.taxonomy_classifier.classify batch --out work/taxonomy_labels.jsonl
+
+# 先小批量试跑
+python -m kb_classifier.taxonomy_classifier.classify batch --limit 200 --out work/taxonomy_labels.jsonl
+```
+
+`classify_corpus` 会复用冻结的 `work/manifest.jsonl`（doc_id 与阶段 A / OKF 流水线
+对齐），分批读取+编码，每行写 `doc_id + 分类 metadata + rel_path/source/title`，
+最后打印 ASSIGNED / PARTIAL / UNKNOWN 占比。
+
+### 作为库在导入流程中调用
+
+```python
+from kb_classifier.taxonomy_classifier import TaxonomyClassifier
+
+clf = TaxonomyClassifier()                       # 构造一次（加载冻结 taxonomy + 351 anchors）
+result = clf.classify_text(title, body)          # 单篇
+metadata = result.to_okf_metadata(doc_id=doc_id) # → 写入文档 metadata
+# 批量：clf.classify_documents(docs)
+```
+
+> 复用要点：`TaxonomyClassifier` 构造一次即可反复调用，**不要每篇都重建**
+> （重建会重新加载模型和 anchors）。单文档导入用 `classify_text`，多文档用
+> `classify_documents(docs)`。
+
+### 分类不准确问题分析与修复（v6 → v7 + margin gate）
+
+在用两份真实文档验证时，v6 taxonomy 出现了**自信但错误**的分类。这里记录根因分析
+和已做的修复，作为后续调优的参考。
+
+#### 两个失败案例
+
+| 文档 | 真实类别 | v6 分类结果（错误） |
+|---|---|---|
+| Career Neighborhoods and Benefits Playbook（HR/人才/福利） | `human_resources` | `Technology & Engineering > AI & ML Platform > Prompt & Retrieval Engineering` |
+| Alert-fatigue telemetry dedup retrospective（SRE/可观测性） | `technology_engineering > site_reliability_observability` | `Billing Anomalies > Duplicate Webhook Events > Hosted API Outages` |
+
+两份文档的各级得分都只有 ~0.50，勉强越过阈值（L1=0.4731），却给了自信的
+`ASSIGNED`。
+
+#### 根因（用逐级得分排名确认，非猜测）
+
+分类是**一次性把文档向量和全部 anchor 做余弦相似度取 argmax 的分层匹配**，没有
+"先判断公司/领域再进对应分支"的逻辑。因此有两个独立的失败机制：
+
+1. **发现的"垃圾" L1 节点劫持顶层决策（SRE 案例）**
+   Stage A 的 HDBSCAN 从科技语料里碎片化出的窄主题（`billing_anomalies`、
+   `performance_monitoring`、`sdk_onboarding_issues`、`model_serving_monitoring`、
+   `release_operations`、`redwood_demo_coordination`）被**错误地放成了 L1**，
+   和 `technology_engineering` 平级。对 SRE 文档，这些垃圾节点排在 L1 前 4，正确的
+   `technology_engineering` 只排第 6。而分层匹配**先定 L1、再只看其子节点**，所以
+   一旦垃圾 L1 险胜，正确分支下那个**全树最高分**的节点
+   （`site_reliability_observability`，0.5663）就被彻底锁在了外面。
+
+2. **弱信号下的近似平局（HR 案例）**
+   即使移除垃圾节点，HR 文档在 L1 上 `technology_engineering`(0.5137) 仅以 **0.0065**
+   险胜正确的 `human_resources`(0.5072)。原因是这份 HR playbook 本身塞满了工程词汇
+   （GPU/infra/Okta/GCP neighborhoods、CLI 片段），whole-document 单向量把主题信号
+   稀释了，argmax 近乎随机。
+
+3. **底层根因：taxonomy 与语料领域不匹配**
+   v6 约 90% 是**银行业务** taxonomy（Retail Banking / Payments / Lending / Treasury…），
+   但真实语料是**科技/AI 公司**（LLM 推理、GPU、SRE、prompt engineering）。多数文档
+   没有理想归属，容易被最近的银行/垃圾 anchor 以微弱优势抢走。
+
+> 关键结论：**"有银行分支"不是 bug，"正确分支只能得 ~0.50 分、且区分度极小"才是 bug。**
+> 阈值 0.47/0.44/0.45 太低，无法拦截错误匹配。
+
+#### 已做的修复
+
+1. **`taxonomy_v7.py`（纯字典编辑，不重扫 50k 语料）**
+   从 v6 删除 6 个错放的"发现型垃圾 L1 节点"，剩 17 个全为 seed 节点。这直接修复
+   SRE 案例（`technology_engineering` 得以上位，其强子节点胜出）。
+   - 产出方式：只编辑 taxonomy 字典 → anchor 向量按内容指纹**自动重建**（~350 段
+     描述，约 1 分钟），**不需要重跑 Stage A / 重扫 50k 文档**。
+   - 生产版本冻结：`PINNED_TAXONOMY_VERSION = 7`
+     （`kb_classifier/taxonomy_classifier/classify.py`）。
+
+2. **L1 margin gate（新增 `AMBIGUOUS` 状态）**
+   `L1_MIN_MARGIN = 0.02`：当 L1 top1 − top2 的分差小于该值时，判为 `AMBIGUOUS`
+   而不是给一个自信的错误路径。修复 HR 这类近似平局案例（0.0065 < 0.02 → AMBIGUOUS）。
+   实现只多做一次对 ~17 个 L1 anchor 的点积，成本可忽略。
+   - 位置：`_apply_thresholds` / `_l1_margins`
+     （`kb_classifier/taxonomy_classifier/classify.py`）。
+
+3. **anchor cache 写入健壮性（Windows WinError 5 修复）**
+   `embed_anchors` 原来用 `os.replace` 原子替换 `anchor_embeddings.npz`，在 Windows 上
+   被杀毒/文件索引/云同步临时锁定目标文件时会抛 `PermissionError [WinError 5]`。改为
+   "唯一临时文件 + 重试退避 + 回退删后重命名 + 回退直写 + 最终仅告警不崩溃"
+   （`kb_classifier/common/anchors.py`）。缓存只是优化，写不成也不影响分类结果。
+   - 建议：把 `kb_classifier/work/` 目录加入 Windows Defender 排除项，可彻底消除该锁。
+
+#### 状态语义（含新增）
+
+- `ASSIGNED`：三级齐全且各级过阈值、L1 区分度足够。
+- `PARTIAL`：某一级低于阈值，路径截断在上一级。
+- `AMBIGUOUS`：**新增** —— L1 近似平局（top1−top2 < margin），不可信。
+- `UNKNOWN`：连 L1 阈值都没过。
+
+#### 尚未做 / 后续建议
+
+- **重新拟合 / 提高阈值**：0.47/0.44/0.45 太宽松。
+- **分段分类再聚合**：长的混合主题文档（如 HR playbook 混大量工程词）用整篇单向量会
+  稀释主题信号；按 section 分类再聚合更稳。
+- **更强的标题加权**：标题往往是最强主题信号，可进一步上调权重。
+- **是否为科技语料重建 taxonomy**：v6/v7 骨架仍偏银行，可考虑用科技导向的 seed 重跑
+  Stage A（这是较大的战略性改动）。
+- **批量失败分类**：把 `AMBIGUOUS` 纳入 batch 的失败统计与分析。
+
+> 现状建议：在完成上述阈值/分段改进并在一批带标注文档上量化准确率之前，
+> **不要对全量语料做批量打标**。两份手挑文档都曾自信地分错，说明当前配置尚未达到
+> 生产可信度。
+
+---
+
 # ChromaDB 与向量索引：讨论总结
 
 ## 1. Embedding 在 ChromaDB 中是什么

@@ -456,3 +456,38 @@ python -m kb_classifier_bootstrap.run_bootstrap --limit 30000
 
 ### 9.6 一句话优先级
 **先做 §9.1（阶段 B，让产物有消费方）与 §9.2（评测，让每轮有刻度）**——这两条把「能跑的 Bootstrap」变成「可度量、可交付的分类系统」；§9.3–9.5 是上规模与生产化后的进阶项。
+
+### 9.7 Next Phase: Move Deep-Fallback Similarity Computation into Shared Matcher
+
+> **Next Phase / Future Work — Not implemented in the current change.**
+
+阶段 B 已实现 **Top-down + Deep Fallback** 路由（见 `taxonomy_classifier/classify.py`）：
+正常 L1 通过时保持原有 top-down；当 L1 分数低于 L1 阈值时，不直接判 `UNKNOWN`，而是
+在更深层寻找强匹配证据。
+
+**当前阶段采用 Option 1**（已实现）：
+
+```text
+classifier 在 L1 fail 时
+额外执行 doc_vec · all_anchor_vecs（复用已加载的向量，不重新 embedding）
+在 L2/L3 中取「达到各自 level 阈值」且 raw score 最高的 candidate
+用该 anchor 的 path_keys 回填完整 taxonomy path
+```
+
+**下一阶段可考虑 Option 2**（尚未实现）：
+
+```text
+修改 shared match_hierarchical
+使 matcher 在 hierarchical routing 的同时
+提供 all-level similarity scores
+```
+
+trade-off：
+
+- ✅ 可以避免 classifier 层重复计算 all-anchor similarity；
+- ✅ 可以让 shared matcher 统一管理 similarity results；
+- ⚠️ 但 `match_hierarchical` 是 **shared component**，可能影响 Stage A（bootstrap）或
+  其他调用方（它当前的 per-branch pruning 行为被多处依赖）；
+- 因此当前阶段**刻意不修改它**；
+- 等 Deep Fallback 在 validation corpus 上验证收益后，再评估是否值得把该能力下沉到
+  shared matcher。

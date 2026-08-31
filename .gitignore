@@ -22,3 +22,6 @@ kb_classifier/work/
 embedding/
 all_documents/
 generated
+.kb_classifier/
+.vscode/
+_tmp*

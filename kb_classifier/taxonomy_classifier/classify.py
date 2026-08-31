@@ -1,8 +1,12 @@
-"""Stage B: per-article, rule-based classification (task 9.1).
+"""Taxonomy classifier: per-article, rule-based classification (task 9.1).
 
-Consumes the frozen Stage A artifacts read-only:
-  * a taxonomy (``config/taxonomy.py`` latest pointer, or a pinned
-    ``taxonomy_v<N>.py`` chosen with ``--taxonomy-version``);
+Formerly ``stage_b``. This is the steady-state production API that classifies a
+document (or a batch) at import time. It consumes the frozen Stage A artifacts
+read-only:
+  * a taxonomy -- by default the PINNED production version (see
+    ``PINNED_TAXONOMY_VERSION`` below) so it does NOT drift as Stage A keeps
+    generating new rounds; override with ``--taxonomy-version`` / the
+    ``taxonomy_version`` argument;
   * ``config/thresholds.json`` (per-level L1/L2/L3 cosine thresholds).
 
 For each document it runs the *same* hierarchical nearest-anchor matching used
@@ -23,14 +27,14 @@ downstream RAG can use for metadata-filtered hybrid retrieval.
 CLI
 ---
   # one document from stdin/args
-  python -m kb_classifier.stage_b.classify text --title "..." --body "..."
+  python -m kb_classifier.taxonomy_classifier.classify text --title "..." --body "..."
 
   # one document from a file (first non-empty line = title, rest = body)
-  python -m kb_classifier.stage_b.classify file path/to/doc.txt
+  python -m kb_classifier.taxonomy_classifier.classify file path/to/doc.txt
 
   # batch: classify every article under all_documents/ -> jsonl of doc_id->path
-  python -m kb_classifier.stage_b.classify batch --out work/stage_b_labels.jsonl
-  python -m kb_classifier.stage_b.classify batch --limit 5000 --out labels.jsonl
+  python -m kb_classifier.taxonomy_classifier.classify batch --out work/taxonomy_labels.jsonl
+  python -m kb_classifier.taxonomy_classifier.classify batch --limit 5000 --out labels.jsonl
 """
 
 from __future__ import annotations
@@ -53,12 +57,27 @@ from ..common.matching import MatchResult, match_hierarchical
 from ..config.settings import SETTINGS, Settings
 from ..config.taxonomy_current import load_current_taxonomy
 
-log = logging.getLogger("kb_stage_b")
+log = logging.getLogger("kb_taxonomy_classifier")
+
+# ---------------------------------------------------------------------------
+# FROZEN PRODUCTION TAXONOMY VERSION (task 9.1 "freeze version")
+#
+# The taxonomy classifier pins a specific Stage A round as its production
+# taxonomy so it does NOT drift every time Stage A generates a new round.
+# It resolves to config/taxonomy_v<PINNED_TAXONOMY_VERSION>[_<count>].py.
+#
+# To promote a newer Stage A round to production: bump this number (and record
+# the change / bootstrap report it came from). Passing an explicit
+# ``taxonomy_version`` (CLI --taxonomy-version) still overrides this pin.
+# Set to None to fall back to "latest" (NOT recommended for production).
+PINNED_TAXONOMY_VERSION: Optional[int] = 7
+# ---------------------------------------------------------------------------
 
 # Status values for a classified document.
 STATUS_ASSIGNED = "ASSIGNED"   # full L1>L2>L3 path above all thresholds
 STATUS_PARTIAL = "PARTIAL"     # matched some levels, fell below a lower one
-STATUS_UNKNOWN = "UNKNOWN"     # did not even clear L1
+STATUS_UNKNOWN = "UNKNOWN"     # L1 failed AND no L2/L3 deep-fallback evidence
+STATUS_FALLBACK = "FALLBACK"   # L1 gate failed but a deep L2/L3 node cleared its own threshold
 
 
 @dataclass
@@ -115,11 +134,15 @@ class Classification:
         return md
 
 
-class Classifier:
+class TaxonomyClassifier:
     """Loads a frozen taxonomy + thresholds and classifies documents.
 
-    Construct once (loads the taxonomy, embeds ~300 anchors, is ready), then
-    call ``classify_documents`` / ``classify_text`` any number of times.
+    Construct once (loads the pinned taxonomy, embeds ~300 anchors, is ready),
+    then call ``classify_documents`` / ``classify_text`` any number of times.
+    Cheap enough to build once at startup and reuse for every imported document.
+
+    By default the taxonomy is the pinned production version
+    (``PINNED_TAXONOMY_VERSION``); pass ``taxonomy_version`` to override.
     """
 
     def __init__(
@@ -132,9 +155,20 @@ class Classifier:
         self.cfg = cfg
 
         # --- taxonomy (frozen Stage A artifact) ---
-        self.taxonomy, self.taxonomy_source = load_current_taxonomy(version=taxonomy_version)
+        # Default to the pinned production version so classification does not
+        # drift with Stage A; an explicit taxonomy_version still overrides it.
+        resolved_version = (
+            taxonomy_version if taxonomy_version is not None else PINNED_TAXONOMY_VERSION
+        )
+        self.taxonomy, self.taxonomy_source = load_current_taxonomy(version=resolved_version)
         self.anchors: List[Anchor] = flatten_taxonomy(self.taxonomy)
         self._anchor_by_key: Dict[str, Anchor] = {a.key: a for a in self.anchors}
+        self._row_by_key: Dict[str, int] = {a.key: i for i, a in enumerate(self.anchors)}
+        # Row indices of the L2 and L3 anchors, used only by the Deep Fallback
+        # path (when the L1 gate fails). Precomputed once so fallback is a single
+        # matmul against already-loaded anchor vectors -- no re-embedding.
+        self._l2_rows: List[int] = [i for i, a in enumerate(self.anchors) if a.level == 2]
+        self._l3_rows: List[int] = [i for i, a in enumerate(self.anchors) if a.level == 3]
 
         # --- thresholds (frozen Stage A artifact) ---
         self.thresholds_path = thresholds_path or cfg.paths.thresholds_out_path
@@ -147,7 +181,7 @@ class Classifier:
             include_breadcrumb=cfg.matching.include_breadcrumb,
             embed_fingerprint=cfg.embedding_fingerprint(),
         )
-        log.info("[stage_b] ready: taxonomy=%s (%d anchors), thresholds L1=%.4f L2=%.4f L3=%.4f",
+        log.info("[taxonomy_classifier] ready: taxonomy=%s (%d anchors), thresholds L1=%.4f L2=%.4f L3=%.4f",
                  self.taxonomy_source, len(self.anchors),
                  self.thresholds["L1"], self.thresholds["L2"], self.thresholds["L3"])
 
@@ -167,8 +201,18 @@ class Classifier:
 
     # ------------------------------------------------------------------
     def _apply_thresholds(self, m: MatchResult) -> Classification:
-        """Turn a raw hierarchical match into a thresholded Classification."""
+        """Turn a raw hierarchical top-down match into a thresholded Classification.
+
+        This is the ORIGINAL top-down behavior and is used unchanged whenever the
+        L1 gate passes. When the L1 gate fails, the caller (classify_vectors)
+        does NOT rely on this function's UNKNOWN result directly; it first tries
+        the Deep Fallback path (see _deep_fallback).
+        """
         t1, t2, t3 = self.thresholds["L1"], self.thresholds["L2"], self.thresholds["L3"]
+        log.debug("[taxonomy_classifier] _apply_thresholds: L1=%.4f/%.4f L2=%.4f/%.4f "
+                  "L3=%.4f/%.4f keys=(%s,%s,%s)",
+                  m.l1_score, t1, m.l2_score, t2, m.l3_score, t3,
+                  m.l1_key, m.l2_key, m.l3_key)
 
         # L1 gate.
         if not (m.l1_score >= t1):
@@ -195,26 +239,118 @@ class Classifier:
                               l1=lv1, l2=lv2, l3=lv3, depth=3)
 
     # ------------------------------------------------------------------
+    def _deep_fallback(self, doc_vec: np.ndarray) -> Classification:
+        """Deep Fallback, used ONLY when the L1 gate has already failed.
+
+        Computes similarity of this single document vector against ALL anchors
+        (one matmul against the already-loaded ``self.anchor_vecs`` -- no
+        re-embedding of the document or the anchors). Among the L2 and L3
+        anchors, keeps those whose raw cosine score clears their OWN level
+        threshold (L2 uses L2 threshold, L3 uses L3 threshold), then selects the
+        single candidate with the highest raw score. The chosen anchor's stored
+        ancestor path (``Anchor.path_keys``) yields the full taxonomy path.
+
+        Returns a FALLBACK Classification, or an UNKNOWN Classification if no L2
+        or L3 anchor clears its threshold.
+        """
+        t2, t3 = self.thresholds["L2"], self.thresholds["L3"]
+        sims = self.anchor_vecs @ doc_vec  # [n_anchors] cosine (all L2-normalised)
+
+        # Gather (row, score) candidates that clear their own level threshold.
+        best_row = -1
+        best_score = -np.inf
+        for row in self._l2_rows:
+            s = float(sims[row])
+            if s >= t2 and s > best_score:
+                best_row, best_score = row, s
+        for row in self._l3_rows:
+            s = float(sims[row])
+            if s >= t3 and s > best_score:
+                best_row, best_score = row, s
+
+        if best_row < 0:
+            log.info("[taxonomy_classifier] deep fallback: no L2/L3 anchor cleared "
+                     "its threshold (L2>=%.4f, L3>=%.4f) -> UNKNOWN", t2, t3)
+            return Classification(status=STATUS_UNKNOWN, levels=[], depth=0)
+
+        chosen = self.anchors[best_row]
+        log.info("[taxonomy_classifier] deep fallback: selected L%d %s (score=%.4f) "
+                 "-> path=%s", chosen.level, chosen.key, best_score, chosen.breadcrumb)
+
+        # Build the full ancestor path from the chosen anchor's stored path_keys.
+        # Each level records its own anchor's raw similarity (already in `sims`);
+        # the chosen node's score is best_score by construction.
+        levels: List[LevelAssignment] = []
+        for k in chosen.path_keys:
+            a = self._anchor_by_key.get(k)
+            name = a.name if a else k
+            row = self._row_by_key.get(k)
+            score = float(sims[row]) if row is not None else 0.0
+            levels.append(LevelAssignment(k, name, score))
+
+        return Classification(
+            status=STATUS_FALLBACK,
+            levels=levels,
+            l1=levels[0] if len(levels) >= 1 else None,
+            l2=levels[1] if len(levels) >= 2 else None,
+            l3=levels[2] if len(levels) >= 3 else None,
+            depth=len(levels),
+        )
+
     def classify_vectors(self, doc_vecs: np.ndarray) -> List[Classification]:
-        """Classify a matrix of L2-normalised document vectors."""
+        """Classify a matrix of L2-normalised document vectors.
+
+        Top-down + Deep Fallback:
+          * Run the existing hierarchical top-down match (unchanged).
+          * If the L1 gate passes, keep the top-down result exactly as before.
+          * If the L1 gate fails, try the Deep Fallback on that document only.
+        """
+        log.info("[taxonomy_classifier] classify_vectors: matching %s against %d anchors",
+                 getattr(doc_vecs, "shape", "?"), len(self.anchors))
         matches = match_hierarchical(doc_vecs, self.anchors, self.anchor_vecs)
-        return [self._apply_thresholds(m) for m in matches]
+        t1 = self.thresholds["L1"]
+
+        results: List[Classification] = []
+        for i, m in enumerate(matches):
+            if m.l1_score >= t1:
+                # L1 passed -> ORIGINAL top-down behavior, untouched.
+                results.append(self._apply_thresholds(m))
+            else:
+                # L1 failed -> Deep Fallback on this single document vector.
+                log.info("[taxonomy_classifier] L1 gate failed (best L1=%s score=%.4f < %.4f); "
+                         "trying deep fallback", m.l1_key, m.l1_score, t1)
+                results.append(self._deep_fallback(doc_vecs[i]))
+
+        log.info("[taxonomy_classifier] classify_vectors: produced %d classification(s)",
+                 len(results))
+        return results
 
     def classify_documents(self, docs: Sequence[Document]) -> List[Classification]:
         """Embed and classify a batch of parsed documents."""
+        log.info("[taxonomy_classifier] classify_documents: %d document(s)", len(docs))
         if not docs:
             return []
         vecs = self.embedder.encode_documents(docs)
-        return self.classify_vectors(vecs)
+        results = self.classify_vectors(vecs)
+        for cl in results:
+            log.info("[taxonomy_classifier] -> status=%s depth=%d path=%r",
+                     cl.status, cl.depth, cl.breadcrumb)
+        return results
 
     def classify_text(self, title: str, body: str) -> Classification:
         """Classify a single (title, body). Uses the same embed_text rendering
         (title-weighting + truncation) as Stage A so scores are comparable."""
+        log.info("[taxonomy_classifier] classify_text: title=%r body_len=%d",
+                 (title or "")[:80], len(body or ""))
         doc = Document(
             doc_index=0, doc_id="adhoc", rel_path="adhoc", stratum="adhoc",
             source="adhoc", title=title or "", body=body or "",
         )
         return self.classify_documents([doc])[0]
+
+
+# Backwards-compatible alias (formerly the public name under stage_b).
+Classifier = TaxonomyClassifier
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +364,7 @@ def _iter_batches(seq: Sequence, size: int):
 
 
 def classify_corpus(
-    classifier: Classifier,
+    classifier: "TaxonomyClassifier",
     out_path: str,
     *,
     cfg: Settings = SETTINGS,
@@ -251,9 +387,9 @@ def classify_corpus(
     if limit is not None:
         entries = entries[:limit]
     n = len(entries)
-    log.info("[stage_b] classifying %d document(s) from %s", n, manifest_path)
+    log.info("[taxonomy_classifier] classifying %d document(s) from %s", n, manifest_path)
 
-    counts = {STATUS_ASSIGNED: 0, STATUS_PARTIAL: 0, STATUS_UNKNOWN: 0}
+    counts = {STATUS_ASSIGNED: 0, STATUS_PARTIAL: 0, STATUS_FALLBACK: 0, STATUS_UNKNOWN: 0}
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     tmp = out_path + ".tmp"
     t0 = time.time()
@@ -272,17 +408,18 @@ def classify_corpus(
                 md["title"] = doc.title
                 fh.write(json.dumps(md, ensure_ascii=False) + "\n")
                 written += 1
-            log.info("[stage_b]   classified %d/%d (%.0f docs/s)",
+            log.info("[taxonomy_classifier]   classified %d/%d (%.0f docs/s)",
                      min(start + batch_size, n), n,
                      written / max(time.time() - t0, 1e-6))
 
     os.replace(tmp, out_path)
     total = sum(counts.values())
-    log.info("[stage_b] wrote %d labels -> %s", written, out_path)
-    log.info("[stage_b] status breakdown: ASSIGNED=%d (%.1f%%) PARTIAL=%d (%.1f%%) "
-             "UNKNOWN=%d (%.1f%%)",
+    log.info("[taxonomy_classifier] wrote %d labels -> %s", written, out_path)
+    log.info("[taxonomy_classifier] status breakdown: ASSIGNED=%d (%.1f%%) PARTIAL=%d (%.1f%%) "
+             "FALLBACK=%d (%.1f%%) UNKNOWN=%d (%.1f%%)",
              counts[STATUS_ASSIGNED], 100.0 * counts[STATUS_ASSIGNED] / max(total, 1),
              counts[STATUS_PARTIAL], 100.0 * counts[STATUS_PARTIAL] / max(total, 1),
+             counts[STATUS_FALLBACK], 100.0 * counts[STATUS_FALLBACK] / max(total, 1),
              counts[STATUS_UNKNOWN], 100.0 * counts[STATUS_UNKNOWN] / max(total, 1))
     return counts
 
@@ -309,11 +446,12 @@ def _print_classification(cl: Classification) -> None:
 
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
-        prog="python -m kb_classifier.stage_b.classify",
-        description="Stage B per-article classifier (consumes frozen taxonomy + thresholds).",
+        prog="python -m kb_classifier.taxonomy_classifier.classify",
+        description="Per-article taxonomy classifier (consumes frozen taxonomy + thresholds).",
     )
     p.add_argument("--taxonomy-version", type=int, default=None,
-                   help="pin a specific taxonomy_v<N>.py; default = latest pointer")
+                   help=f"pin a specific taxonomy_v<N>.py; default = pinned production "
+                        f"version (v{PINNED_TAXONOMY_VERSION})")
     p.add_argument("--thresholds", default=None,
                    help="path to thresholds.json; default = config/thresholds.json")
     sub = p.add_subparsers(dest="command", required=True)
@@ -326,28 +464,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     sp.add_argument("path")
 
     sp = sub.add_parser("batch", help="classify all manifest documents to a jsonl")
-    sp.add_argument("--out", default=os.path.join(SETTINGS.paths.work_dir, "stage_b_labels.jsonl"))
+    sp.add_argument("--out", default=os.path.join(SETTINGS.paths.work_dir, "taxonomy_labels.jsonl"))
     sp.add_argument("--limit", type=int, default=None)
     sp.add_argument("--batch-size", type=int, default=512)
 
     args = p.parse_args(argv)
     _setup_logging()
+    log.info("[taxonomy_classifier] command=%s taxonomy_version=%s thresholds=%s",
+             args.command, args.taxonomy_version, args.thresholds)
 
-    clf = Classifier(SETTINGS, taxonomy_version=args.taxonomy_version,
-                     thresholds_path=args.thresholds)
+    log.info("[taxonomy_classifier] constructing classifier ...")
+    clf = TaxonomyClassifier(SETTINGS, taxonomy_version=args.taxonomy_version,
+                             thresholds_path=args.thresholds)
 
     if args.command == "text":
+        log.info("[taxonomy_classifier] classifying inline text ...")
         _print_classification(clf.classify_text(args.title, args.body))
         return 0
 
     if args.command == "file":
+        log.info("[taxonomy_classifier] reading file: %s", args.path)
         with open(args.path, "r", encoding="utf-8", errors="replace") as f:
             raw = f.read()
         title, body = parse_document_text(raw)
+        log.info("[taxonomy_classifier] parsed file: title=%r body_len=%d",
+                 title[:80], len(body))
         _print_classification(clf.classify_text(title, body))
         return 0
 
     if args.command == "batch":
+        log.info("[taxonomy_classifier] batch mode: out=%s limit=%s batch_size=%d",
+                 args.out, args.limit, args.batch_size)
         classify_corpus(clf, args.out, cfg=SETTINGS,
                         limit=args.limit, batch_size=args.batch_size)
         return 0

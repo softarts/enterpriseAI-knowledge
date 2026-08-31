@@ -20,6 +20,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
+import uuid
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -145,12 +147,79 @@ def embed_anchors(
     vecs = embedder.encode_texts(texts)
     vecs = np.asarray(vecs, dtype=np.float32)
 
-    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-    tmp = cache_path + ".tmp"
-    with open(tmp, "wb") as fh:
-        np.savez(fh, vectors=vecs, fingerprint=np.array(fp))
-    # np.savez appends .npz; account for that then atomically rename.
-    written = tmp if os.path.exists(tmp) else tmp + ".npz"
-    os.replace(written, cache_path)
-    log.info("[anchors] wrote %d anchor vectors -> %s", vecs.shape[0], cache_path)
+    _write_anchor_cache(cache_path, vecs, fp)
     return vecs
+
+
+def _write_anchor_cache(cache_path: str, vecs: np.ndarray, fp: str) -> None:
+    """Persist the anchor vectors to ``cache_path`` as robustly as possible.
+
+    The cache is an optimisation, never correctness-critical: if it cannot be
+    written we log a warning and carry on (the returned vectors are already
+    correct, only the next run will have to re-embed). On Windows ``os.replace``
+    over an existing target intermittently raises WinError 5 when antivirus, a
+    file indexer, or a cloud-sync agent momentarily holds the destination open,
+    so we:
+      * write to a unique, correctly-suffixed (".npz") temp file with the handle
+        fully closed + fsync'd before any rename;
+      * retry the replace with backoff;
+      * fall back to remove-then-rename;
+      * finally fall back to writing straight to the target;
+      * and if all of that fails, just warn -- never crash the caller.
+    """
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    tmp = f"{cache_path}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp.npz"
+    try:
+        with open(tmp, "wb") as fh:
+            np.savez(fh, vectors=vecs, fingerprint=np.array(fp))
+            fh.flush()
+            os.fsync(fh.fileno())
+
+        # Try an atomic replace, retrying through transient Windows locks.
+        last_exc: Optional[OSError] = None
+        for attempt in range(5):
+            try:
+                os.replace(tmp, cache_path)
+                log.info("[anchors] wrote %d anchor vectors -> %s",
+                         vecs.shape[0], cache_path)
+                return
+            except OSError as exc:  # WinError 5 etc.
+                last_exc = exc
+                time.sleep(0.4 * (attempt + 1))
+
+        # Fallback 1: remove the target first, then rename.
+        try:
+            if os.path.exists(cache_path):
+                os.remove(cache_path)
+            os.replace(tmp, cache_path)
+            log.info("[anchors] wrote %d anchor vectors -> %s (after remove)",
+                     vecs.shape[0], cache_path)
+            return
+        except OSError as exc:
+            last_exc = exc
+
+        # Fallback 2: write directly to the target (non-atomic, last resort).
+        try:
+            with open(cache_path, "wb") as fh:
+                np.savez(fh, vectors=vecs, fingerprint=np.array(fp))
+                fh.flush()
+                os.fsync(fh.fileno())
+            log.info("[anchors] wrote %d anchor vectors -> %s (direct)",
+                     vecs.shape[0], cache_path)
+            return
+        except OSError as exc:
+            last_exc = exc
+
+        log.warning(
+            "[anchors] could not persist anchor cache to %s (%s); continuing "
+            "without caching -- the next run will re-embed the anchors. This is "
+            "usually antivirus / a file indexer / cloud-sync holding the file "
+            "open; excluding the work/ dir from those tools removes the warning.",
+            cache_path, last_exc,
+        )
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass

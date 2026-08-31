@@ -249,11 +249,62 @@ class BgeM3Embedder:
         except ImportError:
             return "cpu"
 
+    def _build_sentence_transformer(self, device: str):
+        """Load bge-m3 as a SentenceTransformer, tolerant of ST version quirks.
+
+        sentence-transformers 6.x tries ``AutoProcessor.from_pretrained`` when
+        loading a bare model id, which fails for bge-m3 (a plain text encoder
+        with no "processor" class):
+
+            ValueError: Unrecognized processing class in BAAI/bge-m3 ...
+
+        We therefore try the normal high-level load first, and on that specific
+        failure fall back to assembling the model from explicit Transformer +
+        Pooling modules, which use AutoTokenizer (never AutoProcessor).
+        """
+        from sentence_transformers import SentenceTransformer
+
+        try:
+            log.info("[embed] attempting high-level SentenceTransformer load ...")
+            model = SentenceTransformer(self.cfg.model_name, device=device)
+            log.info("[embed] high-level load succeeded")
+            return model
+        except Exception as exc:  # noqa: BLE001 - fall back on any load failure
+            msg = str(exc)
+            first = msg.splitlines()[0] if msg else ""
+            log.warning(
+                "[embed] high-level load failed (%s: %s); trying explicit "
+                "Transformer+Pooling module construction",
+                type(exc).__name__, first,
+            )
+            try:
+                from sentence_transformers import models as st_models
+
+                word = st_models.Transformer(
+                    self.cfg.model_name, max_seq_length=self.cfg.max_seq_length
+                )
+                pooling = st_models.Pooling(
+                    word.get_word_embedding_dimension(),
+                    pooling_mode="cls",  # bge-m3 uses CLS pooling
+                )
+                model = SentenceTransformer(modules=[word, pooling], device=device)
+                log.info("[embed] fallback module construction succeeded")
+                return model
+            except Exception as exc2:  # noqa: BLE001
+                log.error("[embed] fallback module construction also failed (%s: %s)",
+                          type(exc2).__name__, str(exc2).splitlines()[0] if str(exc2) else "")
+                raise RuntimeError(
+                    "Failed to load BAAI/bge-m3 with the installed sentence-transformers. "
+                    "This build calls AutoProcessor for a bge-m3 (a plain text encoder that "
+                    "has no processor), raising 'Unrecognized processing class'. Pin a "
+                    "compatible version, e.g.:\n"
+                    "    python -m pip install \"sentence-transformers>=2.7,<4\" \"transformers>=4.39,<4.46\"\n"
+                    f"Original error: {first}"
+                ) from exc
+
     @property
     def model(self):
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-
             device = self._resolve_device()
             self._device = device
             t0 = time.time()
@@ -263,7 +314,7 @@ class BgeM3Embedder:
                 device,
                 self.cfg.use_fp16 and device == "cuda",
             )
-            model = SentenceTransformer(self.cfg.model_name, device=device)
+            model = self._build_sentence_transformer(device)
             model.max_seq_length = self.cfg.max_seq_length
             if self.cfg.use_fp16 and device == "cuda":
                 # halves activation memory; bge-m3 in fp16 fits a 4 GB card at
@@ -296,17 +347,26 @@ class BgeM3Embedder:
     def encode_texts(self, texts: Sequence[str], batch_size: Optional[int] = None) -> np.ndarray:
         """Encode to L2-normalised float32 vectors."""
         if not texts:
+            log.info("[embed] encode_texts called with 0 texts; returning empty")
             return np.zeros((0, self.dim), dtype=np.float32)
+        bs = batch_size or self.cfg.batch_size
+        log.info("[embed] encode_texts: encoding %d text(s) (batch_size=%d) ...",
+                 len(texts), bs)
+        t0 = time.time()
         vecs = self.model.encode(
             list(texts),
-            batch_size=batch_size or self.cfg.batch_size,
+            batch_size=bs,
             convert_to_numpy=True,
             normalize_embeddings=True,   # cosine similarity == dot product
             show_progress_bar=False,
         )
-        return np.asarray(vecs, dtype=np.float32)
+        out = np.asarray(vecs, dtype=np.float32)
+        log.info("[embed] encode_texts: done in %.1fs -> shape %s",
+                 time.time() - t0, out.shape)
+        return out
 
     def encode_documents(self, docs: Sequence[Document]) -> np.ndarray:
+        log.info("[embed] encode_documents: rendering embed_text for %d doc(s)", len(docs))
         texts = [
             d.embed_text(self.cfg.body_char_budget, self.cfg.repeat_title) for d in docs
         ]
