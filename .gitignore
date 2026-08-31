@@ -1,7 +1,7 @@
 enterpriseag-bench_all_documents/
 *.pyc
 *.zip
-
+*.npy
 
 # Chroma persistent vector store
 vector_db/
