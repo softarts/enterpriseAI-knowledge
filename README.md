@@ -1190,12 +1190,12 @@ Document + Metadata
 
 ---
 
-# chat_service — Enterprise AI Playground（对话前端 + 后端）
+# chat_service — Enterprise AI Playground（对话 + 文档导入）
 
 `chat_service` 是一个**独立**的服务模块，实现了一个最小可用的 Enterprise AI
 Playground Web UI，并把前后端跑通。它与 `doc_service` / `vector_service` / MCP
-解耦：第一版只实现最直接的 Ask 流程——用户提问经 `chat_service` 调用 Hugging Face
-Cloud LLM，返回答案与可扩展的执行 trace。**当前不接 Chroma、不接 MCP、不做 RAG。**
+解耦：当前支持 Ask 对话和单文件 Documents 导入。Ask 流程调用 Hugging Face Cloud LLM，
+导入流程负责原始文件保存、文本提取和 taxonomy 自动分类。**当前不接 Chroma、不接 MCP、不做 RAG。**
 
 ## 流程图
 
@@ -1216,6 +1216,30 @@ Answer + Trace  ->  { answer, trace{ steps[], request, llm, response }, error }
    v
 Browser: 中间显示回答，右侧 Trace 面板显示真实执行过程
 ```
+
+### 文档导入流程（当前实现）
+
+```
+Browser Documents
+  -> POST /api/documents/import (multipart file)
+  -> ImportService.import_file()
+       校验 -> 原始 bytes 写入 temp -> 提取 title/body
+       -> TaxonomyClassifier.classify_text(title, body)
+       -> SQLite 写入 pending 元数据 -> 返回分类
+  -> POST /api/documents/import/{id}/confirm
+  -> ImportStorage.finalize(): temp -> permanent
+  -> SQLite import_state=imported
+```
+
+上传接口完成解析和分类后文件仍在 `chat_service/import_data/temp/`，数据库状态为
+`pending` 且 `storage_path` 为 `null`；确认后原始文件才移动到永久目录：
+
+```
+chat_service/import_data/storage/documents/{shard}/{uuid}_{safe_original_filename}
+```
+
+其中 `{shard}` 为 `int(md5(uuid), 16) % 256` 的三位目录（`000` 到 `255`）。文件按 UUID
+分片，分类不会决定文件目录，重新分类不会移动文件。
 
 ## 前后端结构
 
@@ -1239,11 +1263,13 @@ chat_service/
       InputBox.jsx          # 输入框（Enter 发送，Shift+Enter 换行）
       TracePanel.jsx        # 右侧：可折叠，渲染后端返回的真实 trace（非 mock）
     src/api/chatApi.js      # askQuestion() -> POST /api/chat
+    src/components/ImportPage.jsx # Documents 导入页面
+    src/components/UploadArea.jsx # 上传、预览分类、确认导入
 ```
 
 ## UI：三段式布局
 
-- **左侧 Sidebar**：可展开/隐藏，放 Chat、Documents 等菜单入口（当前为占位）。
+- **左侧 Sidebar**：可展开/隐藏，切换 Chat 和 Documents 页面。
 - **中间对话区**：显示用户问题与 LLM 回答，底部为输入框；支持 loading、错误、正常回答三种状态。
 - **右侧 Verbose / Trace 面板**：可展开/隐藏，显示本次请求的**真实**执行过程
   （每个 step 的 name / status / detail / 耗时）。
@@ -1255,6 +1281,41 @@ chat_service/
 |---|---|---|
 | `GET` | `/api/health` | 返回服务状态、模型名、`hf_token_configured`（布尔，不返回 token 本身） |
 | `POST` | `/api/chat` | 输入 `{ question }`，返回 `{ answer, trace, error }` |
+| `POST` | `/api/documents/import` | 上传单个文件，解析 + 分类，返回 `pending` 记录 |
+| `GET` | `/api/documents/import/{id}` | 查询导入记录 |
+| `POST` | `/api/documents/import/{id}/confirm` | 将 temp 原始文件移入永久 storage |
+| `GET` | `/api/taxonomy` | 返回只读的 v7 taxonomy 树 |
+
+## 导入存储与 classifier 调用
+
+导入默认使用 `chat_service/import_data/`：待确认的原始文件位于
+`temp/documents/{shard}/`，确认后移动到 `storage/documents/{shard}/`；元数据和分类结果
+写入 `documents.db` 的 `documents_import` 表（字段包括 `category_level_1/2/3`、
+`taxonomy_version`、`classification_status` 和 `raw_status`）。永久文件格式为
+`documents/{shard}/{uuid}_{safe_original_filename}`。实现见
+`chat_service/import_storage.py:4-22, 38-59, 87-111` 和 `chat_service/config.py:104-121`；
+可用 `CHAT_IMPORT_DB`、`CHAT_IMPORT_STORAGE_DIR`、`CHAT_IMPORT_TEMP_DIR` 覆盖路径。
+
+上传接口只创建 `pending` 记录；`POST /api/documents/import/{id}/confirm` 才执行
+`temp -> permanent` 移动并更新为 `imported`。原始文件保持不变，分类不会影响存储目录。
+
+classifier 的实际调用点是 `chat_service/services/import_service.py:144-148`：
+
+```python
+title, body = self._extract_text(temp_path)
+classifier = self._get_classifier()
+cl = classifier.classify_text(title, body)
+```
+
+`import_service.py:74-85` 负责懒加载；`import_service.py:153-169` 将
+`cl.to_okf_metadata()` 的三级路径写入 SQLite。内部链路为
+`kb_classifier/taxonomy_classifier/classify.py:340-349` → `328-338` → `300-326` →
+`common/matching.py:85-123`，再由 `classify.py:203-239` 应用阈值；L1 失败时走
+`classify.py:242-298` 的 deep fallback。生产 taxonomy 固定为 v7（`classify.py:73`）。
+
+导入是同步单文件 MVP，支持 `.pdf`、`.docx`、`.doc`、`.html`、`.htm`、`.txt`、`.md`、
+`.rst`，默认上限 25 MB；当前没有认证、异步任务、人工重新分类、OKF 转换、切块、搜索
+或文件下载 API。完整导入验证见 `chat_service/test_import_e2e.py:15-186`。
 
 `trace` 结构（可扩展）：
 

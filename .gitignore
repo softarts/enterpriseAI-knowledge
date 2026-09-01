@@ -25,6 +25,6 @@ generated
 .kb_classifier/
 .vscode/
 _tmp*
-
+.idea/
 # chat_service document import data (uploads + sqlite DB)
 chat_service/import_data/
