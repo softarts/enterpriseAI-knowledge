@@ -23,6 +23,7 @@ unchanged.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid as uuid_lib
 from pathlib import Path
@@ -166,6 +167,8 @@ class ImportService:
                 "classification_status": simplified,
                 "classification_source": SRC_AUTOMATIC,
                 "raw_status": md.get("classification_status"),
+                "level_scores": json.dumps(md.get("level_scores")) if md.get("level_scores") else None,
+                "document_body": body,
             }
             self.db.insert(record)
             log.info("[import] pending id=%s status=%s raw=%s path=%r",

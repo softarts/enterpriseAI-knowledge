@@ -48,6 +48,8 @@ _COLUMNS = [
     "classification_status",
     "classification_source",
     "raw_status",
+    "level_scores",
+    "document_body",
     "created_at",
     "updated_at",
 ]
@@ -84,6 +86,8 @@ class ImportDB:
                 classification_status  TEXT NOT NULL,
                 classification_source  TEXT NOT NULL,
                 raw_status             TEXT,
+                level_scores           TEXT,
+                document_body          TEXT,
                 created_at             TEXT NOT NULL,
                 updated_at             TEXT NOT NULL
             )

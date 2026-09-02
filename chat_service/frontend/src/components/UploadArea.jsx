@@ -1,6 +1,7 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import DocumentCard from "./DocumentCard.jsx";
-import { importDocument } from "../api/importApi.js";
+import ImportResult from "./ImportResult.jsx";
+import { importDocument, confirmImport } from "../api/importApi.js";
 
 const ALLOWED_EXTS = [".pdf", ".docx", ".doc", ".html", ".htm", ".txt", ".md", ".rst"];
 const ALLOWED_MIME = [
@@ -38,6 +39,7 @@ export default function UploadArea({ onImportStarted }) {
 
   // List of import entries: { id, fileObj, doc, phase, error }
   const [imports, setImports] = useState([]);
+  const [activeResult, setActiveResult] = useState(null);
 
   function updateEntry(id, patch) {
     setImports((prev) =>
@@ -63,6 +65,8 @@ export default function UploadArea({ onImportStarted }) {
       updateEntry(entryId, { phase: "classifying" });
       const doc = await importDocument(file);
       updateEntry(entryId, { doc, phase: "classified" });
+      // Show import result panel for the newly classified document
+      setActiveResult({ id: entryId, fileObj: file, doc });
     } catch (e) {
       updateEntry(entryId, { phase: "error", error: e.message || "导入失败" });
     }
@@ -81,6 +85,40 @@ export default function UploadArea({ onImportStarted }) {
     // Reset so same file can be selected again
     e.target.value = "";
   }
+
+  async function handleConfirmImport() {
+    if (!activeResult?.doc?.id) return;
+    try {
+      const confirmed = await confirmImport(activeResult.doc.id);
+      updateEntry(activeResult.id, { doc: confirmed, phase: "done" });
+      setActiveResult(null);
+    } catch (err) {
+      console.error("Confirm failed:", err);
+      // Could show error in the UI
+    }
+  }
+
+  function handleCancelImport() {
+    setActiveResult(null);
+    // Optionally remove the entry from imports list
+    setImports((prev) => prev.filter((e) => e.id !== activeResult.id));
+  }
+
+  // Prevent accidental refresh during import
+  useEffect(() => {
+    const hasActiveImport = activeResult !== null || imports.some(e => e.phase === "uploading" || e.phase === "classifying");
+
+    const handleBeforeUnload = (e) => {
+      if (hasActiveImport) {
+        e.preventDefault();
+        e.returnValue = "";
+        return "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [activeResult, imports]);
 
   return (
     <div className="upload-area-container">
@@ -121,8 +159,18 @@ export default function UploadArea({ onImportStarted }) {
         </div>
       )}
 
+      {/* Import result panel */}
+      {activeResult && (
+        <ImportResult
+          fileObj={activeResult.fileObj}
+          doc={activeResult.doc}
+          onConfirm={handleConfirmImport}
+          onCancel={handleCancelImport}
+        />
+      )}
+
       {/* Import cards list */}
-      {imports.length > 0 && (
+      {imports.length > 0 && !activeResult && (
         <div className="upload-cards">
           <div className="upload-cards__header">
             <span className="upload-cards__title">导入记录</span>

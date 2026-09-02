@@ -43,6 +43,9 @@ class ClassificationView(BaseModel):
     level_2: Optional[str] = None
     level_3: Optional[str] = None
     breadcrumb: str = ""
+    level_scores: Optional[Dict[str, float]] = Field(
+        default=None, description="L1/L2/L3 classifier scores"
+    )
 
 
 class ImportDocumentResponse(BaseModel):
@@ -58,6 +61,9 @@ class ImportDocumentResponse(BaseModel):
     taxonomy_version: Optional[str] = None
     storage_path: Optional[str] = Field(
         None, description="Relative storage path; set only after confirm."
+    )
+    document_body: Optional[str] = Field(
+        None, description="Extracted document text content"
     )
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

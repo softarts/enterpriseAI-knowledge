@@ -16,6 +16,7 @@ HTTP status. Internal details / stack traces are never exposed.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -59,11 +60,18 @@ def _to_response(rec: Dict[str, Any]) -> ImportDocumentResponse:
     if status != CLS_UNKNOWN:
         names = [rec.get("category_level_1"), rec.get("category_level_2"), rec.get("category_level_3")]
         present = [n for n in names if n]
+        level_scores = None
+        if rec.get("level_scores"):
+            try:
+                level_scores = json.loads(rec["level_scores"])
+            except (json.JSONDecodeError, TypeError):
+                level_scores = None
         classification = ClassificationView(
             level_1=rec.get("category_level_1"),
             level_2=rec.get("category_level_2"),
             level_3=rec.get("category_level_3"),
             breadcrumb=" > ".join(present),
+            level_scores=level_scores,
         )
     return ImportDocumentResponse(
         id=rec["id"],
@@ -73,6 +81,7 @@ def _to_response(rec: Dict[str, Any]) -> ImportDocumentResponse:
         classification=classification,
         taxonomy_version=rec.get("taxonomy_version"),
         storage_path=rec.get("storage_path"),
+        document_body=rec.get("document_body"),
         created_at=rec.get("created_at"),
         updated_at=rec.get("updated_at"),
     )
