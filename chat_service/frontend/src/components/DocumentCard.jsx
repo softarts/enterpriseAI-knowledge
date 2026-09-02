@@ -2,6 +2,29 @@ import { useState } from "react";
 import ClassificationBreadcrumb from "./ClassificationBreadcrumb.jsx";
 import { confirmImport } from "../api/importApi.js";
 
+// Flat "document" icon (page with folded corner) for real documents.
+function DocumentIcon() {
+  return (
+    <svg
+      className="icon icon--document"
+      viewBox="0 0 24 24"
+      width="22"
+      height="22"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v4h4" />
+      <line x1="9" y1="12" x2="15" y2="12" />
+      <line x1="9" y1="16" x2="13" y2="16" />
+    </svg>
+  );
+}
+
 // Human-readable file size
 function fmtSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -62,7 +85,7 @@ export default function DocumentCard({ fileObj, doc, phase, error, onConfirmed }
       {/* Header row */}
       <div className="doc-card__header">
         <span className="doc-card__icon">
-          {isImported ? "✅" : isError ? "❌" : isClassifying ? "⏳" : "📄"}
+          {isImported ? "✅" : isError ? "❌" : isClassifying ? "⏳" : <DocumentIcon />}
         </span>
         <div className="doc-card__meta">
           <span className="doc-card__filename" title={fileObj?.name}>

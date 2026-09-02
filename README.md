@@ -377,7 +377,7 @@ search_chroma (server.py:176)
       "chunk_id": "...playbook-2028-chunk-014",
       "title": "Authentication + Audit Evidence Correlation Playbook",
       "source_path": "confluence/people-ops/onboarding/...playbook-2028.txt",
-      "text": "- Evidence package contains: authN/authZ events, ..."
+      "text": "- Evidence package contains: authN/authZ events, resource-access logs, policy snapshot (versioned), deployment provenance, signed manifest.\n- All items are checksum-verified and the manifest signature validates against a recognized KMS key.\n- Residency constraints are explicit and no evidence artifacts violate the stated residency policy."
     },
     { "rank": 2, "distance": 0.4714, "score": 0.5286, "heading": "Key definitions", "..." : "..." },
     { "rank": 3, "distance": 0.4823, "score": 0.5177, "heading": "Risk exceptions and approval workflow", "..." : "..." }
@@ -1284,22 +1284,59 @@ chat_service/
 | `POST` | `/api/documents/import` | 上传单个文件，解析 + 分类，返回 `pending` 记录 |
 | `GET` | `/api/documents/import/{id}` | 查询导入记录 |
 | `POST` | `/api/documents/import/{id}/confirm` | 将 temp 原始文件移入永久 storage |
-| `GET` | `/api/taxonomy` | 返回只读的 v7 taxonomy 树 |
+| `GET` | `/api/taxonomy` | 返回只读的 v7 taxonomy 树（叶子节点带 `document_count`） |
+| `GET` | `/api/documents` | 分页列出已导入文档，支持 `category_level_1/2/3`、`page`、`page_size` 过滤，返回 `{items, total, page, page_size}`（不含正文） |
+| `GET` | `/api/documents/{id}/preview` | 返回单篇文档的完整提取正文（`document_body`）及 `file_size` / `source` / 分类信息，用于预览 |
+
+## 分类浏览、文档列表与预览 UI
+
+Documents 页的「分类浏览」（`BrowsePage.jsx`）支持从 L1 逐级点进 L3：
+
+- **分类卡片图标**：所有层级（L1/L2/L3）统一使用平面「索引卡片」SVG 图标
+  （`IndexCardIcon`，圆角矩形 + 两行文字线），不再使用文件夹样式图标。
+- **L3 叶子分类**：卡片上直接显示该分类下的文档数（`N 篇文档`，来自
+  `/api/taxonomy` 叶子节点的 `document_count`，由后端按
+  `category_level_1/2/3` 分组统计 `imported` 记录得到）。
+- **文档列表**：进入 L3 后调用 `GET /api/documents?category_level_1..3=...&page=&page_size=`
+  分页展示该分类下的文档行（`DocumentRow`）：平面文档图标（`DocumentIcon`，
+  带折角的页面）、文件名、大小（`file_size`）、来源（`source`）、导入日期。
+- **分页 UI**：每页 10 篇，底部显示「← 上一页 / 第 x / y 页 · 共 N 篇 / 下一页 →」，
+  切换分类时自动回到第 1 页。
+- **文档预览**：点击某个文档行调用 `GET /api/documents/{id}/preview`，在列表下方
+  展开预览面板（文件名、大小、来源、分类面包屑 + 完整提取正文，等宽字体、可滚动），
+  再次点击同一行或「✕ 关闭」收起。
+
+对应前端代码：`chat_service/frontend/src/components/BrowsePage.jsx`
+（`CategoryCard` / `DocumentList` / `DocumentRow` / 预览面板）、
+`chat_service/frontend/src/api/importApi.js`（`listDocuments()` /
+`getDocumentPreview()`）、`chat_service/frontend/src/styles.css`
+（`.doc-list` / `.doc-row` / `.pagination` / `.doc-preview` 样式）。
+
+后端对应实现：`chat_service/api/routes_import.py`（`list_documents` /
+`preview_document` / `get_taxonomy` 中的 `document_count` 标注）、
+`chat_service/import_db.py`（`list_documents()` 分页查询、`count_by_l3()` 统计、
+`file_size` / `source` 新列及对已有数据库的 `ALTER TABLE` 轻量迁移）、
+`chat_service/models.py`（`DocumentSummary` / `DocumentListResponse` /
+`DocumentPreviewResponse`，`TaxonomyNode.document_count`）。
+
+`documents_import` 表新增字段：`file_size INTEGER`（原始文件字节数，导入时由
+`ImportService.import_file` 写入 `len(data)`）和 `source TEXT`（来源，上传导入
+固定为 `"upload"`）；两个字段同时出现在导入、列表和预览的 API 响应中。
 
 ## 导入存储与 classifier 调用
 
 导入默认使用 `chat_service/import_data/`：待确认的原始文件位于
 `temp/documents/{shard}/`，确认后移动到 `storage/documents/{shard}/`；元数据和分类结果
 写入 `documents.db` 的 `documents_import` 表（字段包括 `category_level_1/2/3`、
-`taxonomy_version`、`classification_status` 和 `raw_status`）。永久文件格式为
-`documents/{shard}/{uuid}_{safe_original_filename}`。实现见
-`chat_service/import_storage.py:4-22, 38-59, 87-111` 和 `chat_service/config.py:104-121`；
+`taxonomy_version`、`classification_status`、`raw_status`、`file_size`、`source`）。
+永久文件格式为 `documents/{shard}/{uuid}_{safe_original_filename}`。实现见
+`chat_service/import_storage.py` 和 `chat_service/config.py:104-121`；
 可用 `CHAT_IMPORT_DB`、`CHAT_IMPORT_STORAGE_DIR`、`CHAT_IMPORT_TEMP_DIR` 覆盖路径。
 
 上传接口只创建 `pending` 记录；`POST /api/documents/import/{id}/confirm` 才执行
 `temp -> permanent` 移动并更新为 `imported`。原始文件保持不变，分类不会影响存储目录。
 
-classifier 的实际调用点是 `chat_service/services/import_service.py:144-148`：
+classifier 的实际调用点是 `chat_service/services/import_service.py`：
 
 ```python
 title, body = self._extract_text(temp_path)
@@ -1307,15 +1344,15 @@ classifier = self._get_classifier()
 cl = classifier.classify_text(title, body)
 ```
 
-`import_service.py:74-85` 负责懒加载；`import_service.py:153-169` 将
-`cl.to_okf_metadata()` 的三级路径写入 SQLite。内部链路为
-`kb_classifier/taxonomy_classifier/classify.py:340-349` → `328-338` → `300-326` →
-`common/matching.py:85-123`，再由 `classify.py:203-239` 应用阈值；L1 失败时走
-`classify.py:242-298` 的 deep fallback。生产 taxonomy 固定为 v7（`classify.py:73`）。
+`ImportService` 负责懒加载分类器；`cl.to_okf_metadata()` 的三级路径写入 SQLite。
+内部链路为 `kb_classifier/taxonomy_classifier/classify.py` 的
+`classify_text` → `classify_documents` → `classify_vectors` →
+`common/matching.py` 的 `match_hierarchical`，再由 `_apply_thresholds` 应用阈值；
+L1 失败时走 deep fallback。生产 taxonomy 固定为 v7（`PINNED_TAXONOMY_VERSION = 7`）。
 
 导入是同步单文件 MVP，支持 `.pdf`、`.docx`、`.doc`、`.html`、`.htm`、`.txt`、`.md`、
 `.rst`，默认上限 25 MB；当前没有认证、异步任务、人工重新分类、OKF 转换、切块、搜索
-或文件下载 API。完整导入验证见 `chat_service/test_import_e2e.py:15-186`。
+或文件下载 API。完整导入验证见 `chat_service/test_import_e2e.py`。
 
 `trace` 结构（可扩展）：
 

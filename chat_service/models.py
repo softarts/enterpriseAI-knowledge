@@ -65,6 +65,44 @@ class ImportDocumentResponse(BaseModel):
     document_body: Optional[str] = Field(
         None, description="Extracted document text content"
     )
+    file_size: Optional[int] = Field(None, description="Original file size in bytes")
+    source: Optional[str] = Field(None, description="Document source, e.g. 'upload'")
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class DocumentSummary(BaseModel):
+    """Lightweight document entry for paginated listings (no body)."""
+
+    id: str
+    filename: str
+    import_state: str
+    status: str
+    classification: Optional[ClassificationView] = None
+    file_size: Optional[int] = None
+    source: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class DocumentListResponse(BaseModel):
+    """Paginated document listing."""
+
+    items: List[DocumentSummary] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+
+
+class DocumentPreviewResponse(BaseModel):
+    """Full document content for preview."""
+
+    id: str
+    filename: str
+    file_size: Optional[int] = None
+    source: Optional[str] = None
+    classification: Optional[ClassificationView] = None
+    document_body: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -75,6 +113,9 @@ class TaxonomyNode(BaseModel):
     key: str
     name: str
     children: List["TaxonomyNode"] = Field(default_factory=list)
+    document_count: int = Field(
+        0, description="Number of imported documents in this (leaf) category"
+    )
 
 
 class TaxonomyResponse(BaseModel):

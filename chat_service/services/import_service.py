@@ -169,6 +169,8 @@ class ImportService:
                 "raw_status": md.get("classification_status"),
                 "level_scores": json.dumps(md.get("level_scores")) if md.get("level_scores") else None,
                 "document_body": body,
+                "file_size": len(data),
+                "source": "upload",
             }
             self.db.insert(record)
             log.info("[import] pending id=%s status=%s raw=%s path=%r",
