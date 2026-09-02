@@ -30,25 +30,7 @@ function IndexCardIcon() {
 
 // Flat "document" icon used for real documents (page with folded corner).
 function DocumentIcon() {
-  return (
-    <svg
-      className="icon icon--document"
-      viewBox="0 0 24 24"
-      width="26"
-      height="26"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M6 3h8l4 4v14H6z" />
-      <path d="M14 3v4h4" />
-      <line x1="9" y1="12" x2="15" y2="12" />
-      <line x1="9" y1="16" x2="13" y2="16" />
-    </svg>
-  );
+  return "📄";
 }
 
 function fmtSize(bytes) {
@@ -58,18 +40,18 @@ function fmtSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// One row in the document list of a leaf category.
-function DocumentRow({ doc, onPreview, isActive }) {
+// One document card in the list of a leaf category (L3).
+function DocumentCard({ doc, onPreview, isActive }) {
   return (
     <button
-      className={`doc-row ${isActive ? "doc-row--active" : ""}`}
+      className={`doc-card doc-card--doc-list ${isActive ? "doc-card--active" : ""}`}
       onClick={() => onPreview(doc)}
     >
-      <span className="doc-row__icon"><DocumentIcon /></span>
-      <span className="doc-row__name" title={doc.filename}>{doc.filename}</span>
-      <span className="doc-row__meta">
+      <span className="doc-card__icon">📄</span>
+      <span className="doc-card__name" title={doc.filename}>{doc.filename}</span>
+      <span className="doc-card__meta">
         {doc.file_size != null && <span>{fmtSize(doc.file_size)}</span>}
-        {doc.source && <span className="doc-row__source">{doc.source}</span>}
+        {doc.source && <span className="doc-card__source">{doc.source}</span>}
         {doc.created_at && <span>{doc.created_at.slice(0, 10)}</span>}
       </span>
     </button>
@@ -142,7 +124,7 @@ function DocumentList({ path }) {
         <>
           <div className="doc-list__rows">
             {data.items.map((doc) => (
-              <DocumentRow
+              <DocumentCard
                 key={doc.id}
                 doc={doc}
                 onPreview={openPreview}
@@ -177,12 +159,12 @@ function DocumentList({ path }) {
       {!previewLoading && preview && (
         <div className="doc-preview">
           <div className="doc-preview__header">
-            <span className="doc-preview__icon"><DocumentIcon /></span>
+            <span className="doc-preview__icon">📄</span>
             <div className="doc-preview__title-wrap">
               <strong className="doc-preview__title">{preview.filename}</strong>
               <span className="doc-preview__meta">
                 {preview.file_size != null && `${fmtSize(preview.file_size)} · `}
-                {preview.source || ""}
+                {preview.source != null ? <span className="doc-card__source">{preview.source}</span> : ""}
                 {preview.classification?.breadcrumb && ` · ${preview.classification.breadcrumb}`}
               </span>
             </div>
