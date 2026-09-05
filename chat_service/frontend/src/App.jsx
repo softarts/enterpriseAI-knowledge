@@ -2,6 +2,7 @@ import { useState } from "react";
 import Layout from "./components/Layout.jsx";
 import ChatWindow from "./components/ChatWindow.jsx";
 import ImportPage from "./components/ImportPage.jsx";
+import BrowsePage from "./components/BrowsePage.jsx";
 import { askQuestion } from "./api/chatApi.js";
 
 // Top-level state: active view, messages, loading, trace, pane collapse.
@@ -62,8 +63,10 @@ export default function App() {
     >
       {activeView === "chat" ? (
         <ChatWindow messages={messages} loading={loading} onSend={handleSend} />
-      ) : (
+      ) : activeView === "import" ? (
         <ImportPage />
+      ) : (
+        <BrowsePage />
       )}
     </Layout>
   );

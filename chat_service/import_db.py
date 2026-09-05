@@ -48,6 +48,10 @@ _COLUMNS = [
     "classification_status",
     "classification_source",
     "raw_status",
+    "level_scores",
+    "document_body",
+    "file_size",
+    "source",
     "created_at",
     "updated_at",
 ]
@@ -84,11 +88,23 @@ class ImportDB:
                 classification_status  TEXT NOT NULL,
                 classification_source  TEXT NOT NULL,
                 raw_status             TEXT,
+                level_scores           TEXT,
+                document_body          TEXT,
+                file_size              INTEGER,
+                source                 TEXT,
                 created_at             TEXT NOT NULL,
                 updated_at             TEXT NOT NULL
             )
             """
         )
+        # Lightweight migration: add columns introduced after the first schema.
+        existing = {r[1] for r in self._conn.execute("PRAGMA table_info(documents_import)")}
+        if "file_size" not in existing:
+            self._conn.execute("ALTER TABLE documents_import ADD COLUMN file_size INTEGER")
+        if "source" not in existing:
+            self._conn.execute("ALTER TABLE documents_import ADD COLUMN source TEXT")
+        if "level_scores" not in existing:
+            self._conn.execute("ALTER TABLE documents_import ADD COLUMN level_scores TEXT")
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -98,7 +114,8 @@ class ImportDB:
         record = {**record}
         record.setdefault("created_at", now)
         record["updated_at"] = now
-        cols = [c for c in _COLUMNS if c in record]
+        existing = {r[1] for r in self._conn.execute("PRAGMA table_info(documents_import)")}
+        cols = [c for c in _COLUMNS if c in record and c in existing]
         placeholders = ",".join("?" for _ in cols)
         self._conn.execute(
             f"INSERT INTO documents_import ({','.join(cols)}) VALUES ({placeholders})",
@@ -130,8 +147,66 @@ class ImportDB:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def close(self) -> None:
-        try:
-            self._conn.close()
-        except sqlite3.Error:
-            pass
+    # ------------------------------------------------------------------
+    # browsing / pagination / preview
+    # ------------------------------------------------------------------
+    def list_documents(
+        self,
+        category_level_1: Optional[str] = None,
+        category_level_2: Optional[str] = None,
+        category_level_3: Optional[str] = None,
+        import_state: Optional[str] = STATE_IMPORTED,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """Paginated document listing, optionally filtered by category path.
+
+        Returns (rows, total_count). Rows exclude the heavy document_body.
+        """
+        where: List[str] = []
+        params: List[Any] = []
+        if import_state:
+            where.append("import_state = ?")
+            params.append(import_state)
+        for col, val in (
+            ("category_level_1", category_level_1),
+            ("category_level_2", category_level_2),
+            ("category_level_3", category_level_3),
+        ):
+            if val:
+                where.append(f"{col} = ?")
+                params.append(val)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+        total = self._conn.execute(
+            f"SELECT COUNT(*) FROM documents_import {where_sql}", params
+        ).fetchone()[0]
+
+        page = max(1, page)
+        page_size = max(1, min(page_size, 200))
+        cols = ",".join(c for c in _COLUMNS if c != "document_body")
+        rows = self._conn.execute(
+            f"SELECT {cols} FROM documents_import {where_sql} "
+            "ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            [*params, page_size, (page - 1) * page_size],
+        ).fetchall()
+        return [dict(r) for r in rows], total
+
+    def count_by_l3(self, import_state: Optional[str] = STATE_IMPORTED) -> Dict[tuple, int]:
+        """Document counts grouped by (L1, L2, L3) category names."""
+        where = "WHERE import_state = ?" if import_state else ""
+        params: tuple = (import_state,) if import_state else ()
+        rows = self._conn.execute(
+            "SELECT category_level_1, category_level_2, category_level_3, COUNT(*) AS n "
+            f"FROM documents_import {where} "
+            "GROUP BY category_level_1, category_level_2, category_level_3",
+            params,
+        ).fetchall()
+        return {
+            (r["category_level_1"], r["category_level_2"], r["category_level_3"]): r["n"]
+            for r in rows
+        }
+
+    def get_preview(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single document including its body (for preview)."""
+        return self.get(doc_id)

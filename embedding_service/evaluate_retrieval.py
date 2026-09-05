@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from embedding_service.config import DEFAULT_EMBEDDING_DIR
-from embedding_service.embedder import LocalEmbedder
+from embedding_service.embedder import get_embedder
 from embedding_service.models import EmbeddedChunk
 from embedding_service.search import SimilarityResult, search_by_similarity
 from embedding_service.storage import load_all_embeddings
@@ -132,7 +132,7 @@ def evaluate_retrieval(
     if not all_chunks:
         raise ValueError(f"No embedded chunks loaded from {embedding_dir}")
 
-    embedder = LocalEmbedder()
+    embedder = get_embedder()
 
     print("=" * 60)
     print("Retrieval Evaluation")
