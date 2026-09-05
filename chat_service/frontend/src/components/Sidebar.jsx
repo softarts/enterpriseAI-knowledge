@@ -5,8 +5,8 @@ const MENU = [
 ];
 
 const DOCUMENT_ITEMS = [
-  { key: "import", label: "导入", icon: "📥" },
-  { key: "browse", label: "查看", icon: "🗂️" },
+  { key: "import", label: "Import", icon: "📥" },
+  { key: "browse", label: "Browse", icon: "🗂️" },
 ];
 
 export default function Sidebar({ collapsed, onToggle, activeView, onViewChange }) {
@@ -39,9 +39,9 @@ export default function Sidebar({ collapsed, onToggle, activeView, onViewChange 
           </button>
         ))}
         <div className={`sidebar__group ${documentsActive ? "sidebar__group--active" : ""}`}>
-          <div className="sidebar__group-title" title="文档">
+          <div className="sidebar__group-title" title="Documents">
             <span className="sidebar__icon">📄</span>
-            {!collapsed && <span className="sidebar__label">文档</span>}
+            {!collapsed && <span className="sidebar__label">Documents</span>}
             {!collapsed && <span className="sidebar__group-chevron">⌄</span>}
           </div>
           {!collapsed && (

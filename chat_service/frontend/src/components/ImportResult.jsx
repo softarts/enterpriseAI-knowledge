@@ -63,7 +63,7 @@ export default function ImportResult({ fileObj, doc, onConfirm, onCancel }) {
         {/* Left panel: Document info + Classification + Storage */}
         <div className="import-result__left">
           <div className="import-result__section">
-            <h3 className="import-result__section-title">文档信息</h3>
+            <h3 className="import-result__section-title">Document Info</h3>
             <div className="import-result__info">
               <div className="import-result__info-row">
                 <span className="import-result__icon">{getFileIcon(fileObj?.name)}</span>
@@ -87,7 +87,7 @@ export default function ImportResult({ fileObj, doc, onConfirm, onCancel }) {
           {/* Classification result */}
           {classification && (
             <div className="import-result__section">
-              <h3 className="import-result__section-title">分类结果</h3>
+              <h3 className="import-result__section-title">Classification</h3>
               <div className="import-result__classification">
                 <ClassificationBreadcrumb
                   classification={classification}
@@ -108,7 +108,7 @@ export default function ImportResult({ fileObj, doc, onConfirm, onCancel }) {
                   </div>
                 </div>
                 <div className="import-result__tax-version">
-                  分类版本 {doc?.taxonomy_version || 'v7'}
+                  Taxonomy {doc?.taxonomy_version || 'v7'}
                 </div>
               </div>
             </div>
@@ -116,7 +116,7 @@ export default function ImportResult({ fileObj, doc, onConfirm, onCancel }) {
 
           {/* Storage location */}
           <div className="import-result__section">
-            <h3 className="import-result__section-title">存储位置</h3>
+            <h3 className="import-result__section-title">Storage Location</h3>
             <div className="import-result__storage">
               {storagePath ? (
                 <div className="import-result__storage-path">
@@ -128,7 +128,7 @@ export default function ImportResult({ fileObj, doc, onConfirm, onCancel }) {
                   ))}
                 </div>
               ) : (
-                <span className="import-result__storage-unknown">未确定</span>
+                <span className="import-result__storage-unknown">Undetermined</span>
               )}
             </div>
           </div>
@@ -137,13 +137,13 @@ export default function ImportResult({ fileObj, doc, onConfirm, onCancel }) {
         {/* Right panel: Document body preview */}
         <div className="import-result__right">
           <div className="import-result__preview-header">
-            <h3 className="import-result__preview-title">文档正文</h3>
+            <h3 className="import-result__preview-title">Document Content</h3>
           </div>
           <div className="import-result__preview-content">
             {doc?.document_body ? (
               <pre className="import-result__preview-text">{doc.document_body}</pre>
             ) : (
-              <div className="import-result__preview-empty">无文档内容</div>
+              <div className="import-result__preview-empty">No content</div>
             )}
           </div>
         </div>
@@ -155,13 +155,13 @@ export default function ImportResult({ fileObj, doc, onConfirm, onCancel }) {
           className="btn btn--secondary"
           onClick={onCancel}
         >
-          取消
+          Cancel
         </button>
         <button
           className="btn btn--primary"
           onClick={onConfirm}
         >
-          确认导入
+          Confirm Import
         </button>
       </div>
     </div>

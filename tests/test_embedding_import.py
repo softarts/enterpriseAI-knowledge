@@ -2,15 +2,19 @@ import json
 from pathlib import Path
 import pytest
 
-from embedding_service.config import EMBEDDING_DIMENSION
 from embedding_service.main_import import (
     collect_okf_files,
     compute_output_path,
     process_okf_document,
     resolve_input_root,
 )
-from embedding_service.embedder import LocalEmbedder
+from embedding_service.minilm.embedder import MiniLMEmbedder
 from embedding_service.storage import load_embeddings_from_json
+
+
+class FakeModel:
+    def encode(self, texts, **kwargs):
+        return [[0.0] * 384 for _ in texts]
 
 
 def test_resolve_input_root():
@@ -63,7 +67,7 @@ Complete all setup tasks.
     input_root = resolve_input_root(okf_file)
     assert input_root == gen_dir
 
-    embedder = LocalEmbedder()
+    embedder = MiniLMEmbedder(model=FakeModel())
     success = process_okf_document(
         file_path=okf_file,
         input_root=input_root,
@@ -82,7 +86,7 @@ Complete all setup tasks.
     assert chunks[0].title == "Onboarding Guide (2028)"
     assert chunks[0].source_path == "confluence/people-ops/onboarding/onboarding_guide.txt"
     assert chunks[0].heading == "Overview"
-    assert len(chunks[0].embedding) == EMBEDDING_DIMENSION
+    assert len(chunks[0].embedding) == embedder.dimension
 
 
 def test_process_okf_document_custom_output(tmp_path: Path):
@@ -106,7 +110,7 @@ Expenses and limits details.
     custom_out = tmp_path / "my_custom_embeddings"
     input_root = resolve_input_root(okf_file)
 
-    embedder = LocalEmbedder()
+    embedder = MiniLMEmbedder(model=FakeModel())
     success = process_okf_document(
         file_path=okf_file,
         input_root=input_root,

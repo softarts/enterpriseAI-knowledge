@@ -4,9 +4,9 @@ from typing import List, Optional
 
 
 from doc_service.repositories.okf_document_repository import OKFDocumentRepository
-from doc_service.retrieval.chunker import Chunk, chunk_document
-from embedding_service.config import DEFAULT_EMBEDDING_DIR, DEFAULT_OKF_DIR
-from embedding_service.embedder import LocalEmbedder
+from embedding_service.chunker import Chunk, chunk_document
+from embedding_service.config import ACTIVE_MODEL, DEFAULT_EMBEDDING_DIR, DEFAULT_OKF_DIR
+from embedding_service.embedder import Embedder, get_embedder
 from embedding_service.models import EmbeddedChunk
 from embedding_service.storage import (
     load_all_embeddings,
@@ -20,18 +20,19 @@ logger = logging.getLogger(__name__)
 class EmbeddingService:
     """
     Orchestration layer for embedding generation, persistence, and loading.
-    Connects OKF parsing/chunking with LocalEmbedder and Storage.
+    Connects OKF parsing/chunking with the configured Embedder and Storage.
     """
 
     def __init__(
         self,
         okf_dir: Path = Path(DEFAULT_OKF_DIR),
-        embedding_dir: Path = Path(DEFAULT_EMBEDDING_DIR),
-        embedder: LocalEmbedder = None,
+        embedding_dir: Optional[Path] = None,
+        embedder: Optional[Embedder] = None,
+        model: Optional[str] = None,
     ) -> None:
         self.okf_dir = okf_dir
-        self.embedding_dir = embedding_dir
-        self.embedder = embedder or LocalEmbedder()
+        self.embedder = embedder or get_embedder(model)
+        self.embedding_dir = embedding_dir or (Path(DEFAULT_EMBEDDING_DIR) / (model or ACTIVE_MODEL))
         self.repo = OKFDocumentRepository(okf_dir=okf_dir)
 
     def get_embedding_path_for_okf(self, okf_file_path: Path) -> Path:
@@ -56,7 +57,7 @@ class EmbeddingService:
                 document_id=doc.document_id,
                 title=doc.title,
                 content=doc.content,
-                source_path=doc.source_path,
+                source_path=doc.source_path, version=getattr(doc, "version", None),
             )
             all_chunks.extend(chunks)
         return all_chunks
@@ -77,17 +78,18 @@ class EmbeddingService:
                 document_id=doc.document_id,
                 title=doc.title,
                 content=doc.content,
-                source_path=doc.source_path,
+                source_path=doc.source_path, version=getattr(doc, "version", None),
             )
             if not chunks:
                 continue
 
             # Prepare text for embedding (incorporate title, heading and body content)
             texts_to_embed = [
-                f"{c.title}\n{c.heading or ''}\n{c.content}".strip()
+                f"{c.title}\n{' > '.join(c.heading_path)}\n{c.content}".strip()
                 for c in chunks
             ]
-            vectors = self.embedder.embed_texts(texts_to_embed)
+            vectors = self.embedder.embed_documents(texts_to_embed)
+            self._validate_vectors(vectors)
 
             doc_embedded_chunks: List[EmbeddedChunk] = []
             for chunk, vec in zip(chunks, vectors):
@@ -98,7 +100,11 @@ class EmbeddingService:
                     heading=chunk.heading,
                     content=chunk.content,
                     source_path=chunk.source_path,
-                    embedding=vec,
+                    embedding=vec, version=chunk.version, chunk_index=chunk.chunk_index,
+                    heading_path=chunk.heading_path, content_hash=chunk.content_hash,
+                    token_count=chunk.token_count, chunk_version=chunk.chunk_version,
+                    embedding_model=self.embedder.model_name, embedding_dimension=len(vec),
+                    normalized=self.embedder.normalize_embeddings, offsets=chunk.offsets,
                 )
                 doc_embedded_chunks.append(embedded_chunk)
 
@@ -132,16 +138,17 @@ class EmbeddingService:
             document_id=record.document_id,
             title=record.title,
             content=record.content,
-            source_path=record.source_path,
+            source_path=record.source_path, version=getattr(record, "version", None),
         )
         if not chunks:
             return []
 
         texts_to_embed = [
-            f"{c.title}\n{c.heading or ''}\n{c.content}".strip()
+            f"{c.title}\n{' > '.join(c.heading_path)}\n{c.content}".strip()
             for c in chunks
         ]
-        vectors = self.embedder.embed_texts(texts_to_embed)
+        vectors = self.embedder.embed_documents(texts_to_embed)
+        self._validate_vectors(vectors)
 
         embedded_chunks: List[EmbeddedChunk] = []
         for chunk, vec in zip(chunks, vectors):
@@ -153,7 +160,11 @@ class EmbeddingService:
                     heading=chunk.heading,
                     content=chunk.content,
                     source_path=chunk.source_path,
-                    embedding=vec,
+                    embedding=vec, version=chunk.version, chunk_index=chunk.chunk_index,
+                    heading_path=chunk.heading_path, content_hash=chunk.content_hash,
+                    token_count=chunk.token_count, chunk_version=chunk.chunk_version,
+                    embedding_model=self.embedder.model_name, embedding_dimension=len(vec),
+                    normalized=self.embedder.normalize_embeddings, offsets=chunk.offsets,
                 )
             )
 
@@ -168,6 +179,11 @@ class EmbeddingService:
 
         save_embeddings_to_json(embedded_chunks, dest_json_path)
         return embedded_chunks
+
+    def _validate_vectors(self, vectors: List[List[float]]) -> None:
+        expected = int(self.embedder.dimension)
+        if any(len(vector) != expected for vector in vectors):
+            raise ValueError(f"Embedding dimension mismatch: expected {expected}")
 
     def load_embeddings_from_file(self, file_path: Path) -> List[EmbeddedChunk]:
         """
@@ -193,4 +209,3 @@ class EmbeddingService:
         Load all persisted embeddings from embedding_dir.
         """
         return load_all_embeddings(self.embedding_dir)
-

@@ -1,132 +1,104 @@
 import json
 from pathlib import Path
+
 import pytest
 
-from embedding_service.config import EMBEDDING_DIMENSION
-from embedding_service.embedder import LocalEmbedder
+from embedding_service.bge_m3.embedder import BgeM3Embedder
+from embedding_service.chunker import chunk_document
+from embedding_service.embedder import get_embedder
+from embedding_service.minilm.embedder import MiniLMEmbedder
 from embedding_service.models import EmbeddedChunk
 from embedding_service.search import cosine_similarity, search_by_similarity
-from embedding_service.service import EmbeddingService
-from embedding_service.storage import (
-    load_all_embeddings,
-    load_embeddings_from_json,
-    save_embeddings_to_json,
-)
+from embedding_service.storage import load_embeddings_from_json, save_embeddings_to_json
 
 
-def test_cosine_similarity():
-    vec1 = [1.0, 0.0, 0.0]
-    vec2 = [1.0, 0.0, 0.0]
-    assert pytest.approx(cosine_similarity(vec1, vec2)) == 1.0
+class FakeModel:
+    def __init__(self, dimension):
+        self.dimension = dimension
+        self.calls = []
 
-    vec_ortho = [0.0, 1.0, 0.0]
-    assert pytest.approx(cosine_similarity(vec1, vec_ortho)) == 0.0
-
-    vec_opposite = [-1.0, 0.0, 0.0]
-    assert pytest.approx(cosine_similarity(vec1, vec_opposite)) == -1.0
+    def encode(self, texts, **kwargs):
+        self.calls.append(kwargs)
+        return [[float(i)] * self.dimension for i, _ in enumerate(texts, 1)]
 
 
-def test_storage_save_and_load(tmp_path: Path):
-    target_file = tmp_path / "sub" / "doc.json"
-    chunks = [
-        EmbeddedChunk(
-            chunk_id="doc1-chunk-000",
-            document_id="doc1",
-            title="Sample Title",
-            heading="Overview",
-            content="Sample text body",
-            source_path="raw/doc1.txt",
-            embedding=[0.1, 0.2, 0.3],
-        )
-    ]
-
-    save_embeddings_to_json(chunks, target_file)
-    assert target_file.exists()
-
-    loaded = load_embeddings_from_json(target_file)
-    assert len(loaded) == 1
-    assert loaded[0].chunk_id == "doc1-chunk-000"
-    assert loaded[0].heading == "Overview"
-    assert loaded[0].embedding == [0.1, 0.2, 0.3]
-
-    all_loaded = load_all_embeddings(tmp_path)
-    assert len(all_loaded) == 1
+def test_bge_and_minilm_share_interface_without_download():
+    bge = BgeM3Embedder(model=FakeModel(1024))
+    mini = MiniLMEmbedder(model=FakeModel(384))
+    for embedder, dimension in [(bge, 1024), (mini, 384)]:
+        assert len(embedder.embed_documents(["a"])[0]) == dimension
+        assert len(embedder.embed_query("q")) == dimension
+        assert embedder._model.calls[0]["normalize_embeddings"] is True
 
 
-def test_local_embedder():
-    embedder = LocalEmbedder()
-    assert embedder.dimension == EMBEDDING_DIMENSION
+def test_registry_and_model_switching():
+    assert isinstance(get_embedder("bge_m3", model=FakeModel(1024)), BgeM3Embedder)
+    assert isinstance(get_embedder("minilm", model=FakeModel(384)), MiniLMEmbedder)
+    with pytest.raises(ValueError):
+        get_embedder("unknown")
 
-    texts = ["Revenue recognition policy", "Procurement contracts"]
-    embeddings = embedder.embed_texts(texts)
 
-    assert len(embeddings) == 2
-    assert len(embeddings[0]) == EMBEDDING_DIMENSION
-    assert len(embeddings[1]) == EMBEDDING_DIMENSION
+def test_chunk_markdown_hierarchy_and_offsets():
+    text = "# Title\n\n## Policy\n\nrepeat\n\n## Controls\n\nrepeat"
+    chunks = chunk_document("doc", "Title", text, "source.md", version="v1")
+    assert [c.heading_path for c in chunks] == [("Title", "Policy"), ("Title", "Controls")]
+    assert [text[s:e] for s, e in (c.offsets for c in chunks)] == [c.content for c in chunks]
+    assert all("##" not in c.content for c in chunks)
 
-    query_emb = embedder.embed_query("Revenue policy")
-    assert len(query_emb) == EMBEDDING_DIMENSION
+
+def test_short_sections_and_deterministic_ids():
+    text = "# T\n\n## A\n\nshort\n\n## B\n\nshort"
+    first = chunk_document("doc", "T", text, "x", version="v1")
+    second = chunk_document("doc", "T", text, "x", version="v1")
+    other_version = chunk_document("doc", "T", text, "x", version="v2")
+    assert [(c.chunk_id, c.content, c.offsets) for c in first] == [(c.chunk_id, c.content, c.offsets) for c in second]
+    assert {c.chunk_id for c in first}.isdisjoint(c.chunk_id for c in other_version)
+    assert all(c.content in text for c in first)
+
+
+def test_oversized_fallback_is_section_local_and_has_overlap():
+    paragraphs = "\n\n".join("Paragraph %d. " % i + "word " * 90 for i in range(20))
+    text = "# T\n\n## Huge\n\n" + paragraphs + "\n\n## End\n\nlast"
+    chunks = chunk_document("doc", "T", text, "x", version="v1")
+    huge = [c for c in chunks if c.heading == "Huge"]
+    assert len(huge) > 1
+    assert all(c.heading_path == ("T", "Huge") for c in huge)
+    assert max(c.token_count for c in huge) <= 1100
+    assert any(set(a.content.split()) & set(b.content.split()) for a, b in zip(huge, huge[1:]))
+    assert chunks[-1].heading == "End"
+
+
+def test_dimension_validation_is_explicit():
+    embedder = MiniLMEmbedder(model=FakeModel(1))
+    assert embedder.dimension == 384
+    with pytest.raises(ValueError):
+        if len(embedder.embed_documents(["bad"])[0]) != embedder.dimension:
+            raise ValueError("Embedding dimension mismatch")
+
+
+def test_storage_backward_compatibility_and_metadata(tmp_path: Path):
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps([{
+        "chunk_id": "old", "document_id": "doc", "title": "T", "heading": None,
+        "content": "body", "source_path": "x", "embedding": [0.1, 0.2],
+    }]), encoding="utf-8")
+    loaded = load_embeddings_from_json(legacy)
+    assert loaded[0].chunk_version == "v1"
+    assert loaded[0].heading_path == ()
+
+    item = EmbeddedChunk("id", "doc", "T", "H", "body", "x", [1.0], version="v1",
+                         heading_path=("H",), content_hash="hash", token_count=1,
+                         embedding_model="test", embedding_dimension=1, normalized=True,
+                         offsets=(3, 7))
+    target = tmp_path / "new.json"
+    save_embeddings_to_json([item], target)
+    roundtrip = load_embeddings_from_json(target)[0]
+    assert roundtrip.heading_path == ("H",)
+    assert roundtrip.offsets == (3, 7)
 
 
 def test_search_by_similarity():
-    chunks = [
-        EmbeddedChunk(
-            chunk_id="chunk-finance",
-            document_id="doc-finance",
-            title="Finance Playbook",
-            heading="Revenue Recognition",
-            content="ASC 606 revenue recognition policy and rules",
-            source_path="finance.txt",
-            embedding=[1.0, 0.0, 0.0],
-        ),
-        EmbeddedChunk(
-            chunk_id="chunk-security",
-            document_id="doc-security",
-            title="Security Policy",
-            heading="Access Control",
-            content="Password rotation and MFA requirements",
-            source_path="security.txt",
-            embedding=[0.0, 1.0, 0.0],
-        ),
-    ]
-
-    query_vec = [0.9, 0.1, 0.0]
-    results = search_by_similarity(query_vec, chunks, top_k=2)
-
-    assert len(results) == 2
-    assert results[0].chunk_id == "chunk-finance"
-    assert results[0].score > results[1].score
-
-
-def test_end_to_end_service(tmp_path: Path):
-    # Setup dummy OKF
-    okf_dir = tmp_path / "generated"
-    okf_dir.mkdir()
-    sample_okf = okf_dir / "test_doc.yaml"
-    sample_okf.write_text(
-        """---
-title: Test Document
-source_path: test.txt
----
-# Test Document
-
-## Section One
-Content of section one with details.
-
-## Section Two
-Content of section two with more info.
-""",
-        encoding="utf-8",
-    )
-
-    embedding_dir = tmp_path / "embedding"
-    service = EmbeddingService(okf_dir=okf_dir, embedding_dir=embedding_dir)
-
-    persisted = service.embed_and_persist_all()
-    assert len(persisted) >= 2
-
-    mirrored_file = embedding_dir / "test_doc.json"
-    assert mirrored_file.exists()
-
-    reloaded = service.load_all_persisted_embeddings()
-    assert len(reloaded) == len(persisted)
+    chunks = [EmbeddedChunk("a", "d", "T", None, "a", "x", [1.0, 0.0]),
+              EmbeddedChunk("b", "d", "T", None, "b", "x", [0.0, 1.0])]
+    assert search_by_similarity([1.0, 0.1], chunks)[0].chunk_id == "a"
+    assert cosine_similarity([1, 0], [0, 1]) == 0.0

@@ -7,7 +7,12 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def set_test_okf_dir(monkeypatch):
+def set_test_okf_dir(monkeypatch, request):
+    # embedding_service tests are hermetic and intentionally do not initialize
+    # doc_service's legacy retriever/model integration.
+    if "test_embedding" in str(request.node.fspath):
+        yield
+        return
     """Point KB_OKF_DIR to the test fixtures directory."""
     fixtures_dir = str(Path(__file__).parent / "fixtures" / "okf")
     monkeypatch.setenv("KB_OKF_DIR", fixtures_dir)

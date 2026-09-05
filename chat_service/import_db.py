@@ -103,6 +103,8 @@ class ImportDB:
             self._conn.execute("ALTER TABLE documents_import ADD COLUMN file_size INTEGER")
         if "source" not in existing:
             self._conn.execute("ALTER TABLE documents_import ADD COLUMN source TEXT")
+        if "level_scores" not in existing:
+            self._conn.execute("ALTER TABLE documents_import ADD COLUMN level_scores TEXT")
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -112,7 +114,8 @@ class ImportDB:
         record = {**record}
         record.setdefault("created_at", now)
         record["updated_at"] = now
-        cols = [c for c in _COLUMNS if c in record]
+        existing = {r[1] for r in self._conn.execute("PRAGMA table_info(documents_import)")}
+        cols = [c for c in _COLUMNS if c in record and c in existing]
         placeholders = ",".join("?" for _ in cols)
         self._conn.execute(
             f"INSERT INTO documents_import ({','.join(cols)}) VALUES ({placeholders})",

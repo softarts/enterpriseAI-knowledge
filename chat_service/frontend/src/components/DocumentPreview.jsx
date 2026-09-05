@@ -57,11 +57,11 @@ export default function DocumentPreview({ body }) {
       {!loaded && (
         <div className="doc-preview__empty">
           <span className="spinner" />
-          <span>正在加载文档内容…</span>
+          <span>Loading document content…</span>
         </div>
       )}
       {paragraphs.length === 0 ? (
-        <div className="doc-preview__empty">暂无正文内容</div>
+        <div className="doc-preview__empty">No content available</div>
       ) : (
         paragraphs.map((p, i) => {
           if (p.type === "text") {

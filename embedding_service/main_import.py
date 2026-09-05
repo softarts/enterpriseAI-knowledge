@@ -2,9 +2,9 @@
 Batch import OKF documents directly to chunks and embeddings.
 
 Reads standardized OKF documents (Markdown + YAML frontmatter in generated/),
-generates heading-aware chunks using existing chunker, computes embeddings
-using LocalEmbedder, and persists them to embedding/ mirroring the generated/
-folder structure.
+generates heading-aware chunks using the local common chunker, computes
+embeddings using the configured model, and persists them to a model-specific
+directory mirroring the generated/ folder structure.
 """
 
 import argparse
@@ -20,9 +20,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from doc_service.repositories.okf_document_repository import OKFDocumentRepository
-from doc_service.retrieval.chunker import Chunk, chunk_document
-from embedding_service.config import DEFAULT_EMBEDDING_DIR, DEFAULT_OKF_DIR
-from embedding_service.embedder import LocalEmbedder
+from embedding_service.chunker import Chunk, chunk_document
+from embedding_service.config import ACTIVE_MODEL, DEFAULT_EMBEDDING_DIR, DEFAULT_OKF_DIR
+from embedding_service.embedder import Embedder, get_embedder
 from embedding_service.models import EmbeddedChunk
 from embedding_service.storage import save_embeddings_to_json
 
@@ -94,7 +94,7 @@ def process_okf_document(
     file_path: Path,
     input_root: Path,
     output_dir: Path,
-    embedder: LocalEmbedder,
+    embedder: Embedder,
     mirror: bool = True,
     vector_store: Optional["object"] = None,
 ) -> bool:
@@ -128,10 +128,12 @@ def process_okf_document(
 
         # Embed all chunk texts
         texts_to_embed = [
-            f"{c.title}\n{c.heading or ''}\n{c.content}".strip()
+            f"{c.title}\n{' > '.join(c.heading_path)}\n{c.content}".strip()
             for c in chunks
         ]
-        vectors = embedder.embed_texts(texts_to_embed)
+        vectors = embedder.embed_documents(texts_to_embed)
+        if len(vectors) != len(chunks) or any(len(vector) != embedder.dimension for vector in vectors):
+            raise ValueError(f"Embedding dimension mismatch for {embedder.model_name}")
 
         # Assemble EmbeddedChunk models
         embedded_chunks: List[EmbeddedChunk] = []
@@ -144,7 +146,11 @@ def process_okf_document(
                     heading=chunk.heading,
                     content=chunk.content,
                     source_path=chunk.source_path,
-                    embedding=vec,
+                    embedding=vec, version=chunk.version, chunk_index=chunk.chunk_index,
+                    heading_path=chunk.heading_path, content_hash=chunk.content_hash,
+                    token_count=chunk.token_count, chunk_version=chunk.chunk_version,
+                    embedding_model=embedder.model_name, embedding_dimension=len(vec),
+                    normalized=embedder.normalize_embeddings, offsets=chunk.offsets,
                 )
             )
 
@@ -169,6 +175,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Batch import OKF documents (from generated/) into chunks + embeddings with local persistence."
     )
+    parser.add_argument("--model", default=ACTIVE_MODEL, choices=["bge_m3", "minilm"],
+                        help="Embedding model (default: configured active model).")
     parser.add_argument(
         "--input",
         required=False,
@@ -211,7 +219,7 @@ def main():
         output_dir = Path(args.output).resolve()
         mirror = False
     else:
-        output_dir = (PROJECT_ROOT / DEFAULT_EMBEDDING_DIR).resolve()
+        output_dir = (PROJECT_ROOT / DEFAULT_EMBEDDING_DIR / args.model).resolve()
         mirror = True
 
     files = collect_okf_files(input_path)
@@ -221,7 +229,7 @@ def main():
 
     logger.info("Found %d OKF file(s) to process. Input root: %s, Output dir: %s, Mirror: %s", len(files), input_root, output_dir, mirror)
 
-    embedder = LocalEmbedder()
+    embedder = get_embedder(args.model)
 
     # Optionally open the Chroma vector store (only when --vector-db is set, so
     # default runs neither import chromadb nor touch vector_db/).

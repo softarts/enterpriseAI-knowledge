@@ -4,7 +4,7 @@ export default function ClassificationScores({ l1, l2, l3 }) {
 
   return (
     <div className="classification-scores">
-      <span className="scores__label">分类分数</span>
+      <span className="scores__label">Classification Scores</span>
       <div className="scores__items">
         <span className="scores__item">{`L1 ${score(l1)}`}</span>
         <span className="scores__item">{`L2 ${score(l2)}`}</span>

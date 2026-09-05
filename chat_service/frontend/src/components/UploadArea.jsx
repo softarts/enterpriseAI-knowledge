@@ -22,12 +22,12 @@ function extOf(name) {
 }
 
 function validateFile(file) {
-  if (!file) return "未选择文件";
-  if (file.size === 0) return "文件为空";
-  if (file.size > MAX_BYTES) return `文件超过 ${MAX_MB} MB 上限`;
+  if (!file) return "No file selected";
+  if (file.size === 0) return "File is empty";
+  if (file.size > MAX_BYTES) return `File exceeds ${MAX_MB} MB limit`;
   const ext = extOf(file.name);
   if (!ALLOWED_EXTS.includes(ext)) {
-    return `不支持 ${ext || "(无扩展名)"} 格式，支持：${ALLOWED_EXTS.join("  ")}`;
+    return `Unsupported format (${ext || "no extension"}). Supported: ${ALLOWED_EXTS.join("  ")}`;
   }
   return null;
 }
@@ -68,7 +68,7 @@ export default function UploadArea({ onImportStarted }) {
       // Show import result panel for the newly classified document
       setActiveResult({ id: entryId, fileObj: file, doc });
     } catch (e) {
-      updateEntry(entryId, { phase: "error", error: e.message || "导入失败" });
+      updateEntry(entryId, { phase: "error", error: e.message || "Import failed" });
     }
   }
 
@@ -133,14 +133,14 @@ export default function UploadArea({ onImportStarted }) {
         tabIndex={0}
         id="upload-dropzone"
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click(); }}
-        aria-label="拖放或点击选择文件上传"
+        aria-label="Drag & drop or click to upload files"
       >
         <div className="upload-dropzone__icon">📂</div>
         <div className="upload-dropzone__primary">
-          拖放文件到此处，或 <span className="upload-dropzone__link">点击选择</span>
+          Drag & drop files here, or <span className="upload-dropzone__link">browse</span>
         </div>
         <div className="upload-dropzone__hint">
-          支持：PDF · DOCX · TXT · Markdown · HTML · RST &nbsp;·&nbsp; 最大 {MAX_MB} MB
+          Supports: PDF · DOCX · TXT · Markdown · HTML · RST &nbsp;·&nbsp; Max {MAX_MB} MB
         </div>
         <input
           ref={fileInputRef}
@@ -173,8 +173,8 @@ export default function UploadArea({ onImportStarted }) {
       {imports.length > 0 && !activeResult && (
         <div className="upload-cards">
           <div className="upload-cards__header">
-            <span className="upload-cards__title">导入记录</span>
-            <span className="upload-cards__count">{imports.length} 个文件</span>
+            <span className="upload-cards__title">Import History</span>
+            <span className="upload-cards__count">{imports.length} {imports.length === 1 ? "file" : "files"}</span>
           </div>
           <div className="upload-cards__list">
             {imports.map((entry) => (

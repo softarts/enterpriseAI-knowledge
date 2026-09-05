@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from embedding_service.embedder import LocalEmbedder
+from embedding_service.embedder import get_embedder
 from embedding_service.search import search_by_similarity
 from embedding_service.service import EmbeddingService
 
@@ -36,7 +36,7 @@ def run_validation():
     print(f"    - OKF Directory: {okf_dir}")
     print(f"    - Embedding Directory: {embedding_dir}")
 
-    embedder = LocalEmbedder()
+    embedder = get_embedder()
     service = EmbeddingService(okf_dir=okf_dir, embedding_dir=embedding_dir, embedder=embedder)
 
     # Step 1 & 2: Load and Chunk
