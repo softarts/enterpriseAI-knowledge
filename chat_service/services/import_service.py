@@ -4,25 +4,24 @@ Document Import orchestration (MVP: single file, synchronous).
 Pipeline for one uploaded file:
 
     upload bytes
-      -> save to temp storage (original file, as-is)
-      -> extract text (reuse import_raw_doc_to_okf parsers)
+      -> save to temp storage
+      -> convert to OKF through document_import
+      -> extract text and classify
       -> classify (reuse TaxonomyClassifier.classify_text)
       -> persist metadata row (state=pending)
       -> return result
 
     confirm:
-      -> move temp file into permanent sharded storage
+      -> move converted OKF file into permanent storage
       -> update row (state=imported)
 
-Deliberately NOT done here (per scope): OKF conversion, chunking, ChromaDB,
-search, async jobs, auth, manual re-classification.
-
-The document text is only used as classifier input; the ORIGINAL file is stored
-unchanged.
+Chunking, embedding and ChromaDB persistence are performed after confirmation
+through the embedding pipeline service.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid as uuid_lib
 from pathlib import Path
@@ -67,6 +66,13 @@ class ImportService:
         self.db = ImportDB(settings.import_db_path)
         self.storage = ImportStorage(settings.import_storage_dir, settings.import_temp_dir)
         self._classifier = None  # lazy TaxonomyClassifier singleton
+        self._document_import = None
+
+    def _get_document_import(self):
+        if self._document_import is None:
+            from document_import import DocumentImportService
+            self._document_import = DocumentImportService()
+        return self._document_import
 
     # ------------------------------------------------------------------
     # lazy heavy deps
@@ -87,11 +93,7 @@ class ImportService:
     @staticmethod
     def _extract_text(temp_path: Path):
         """Reuse the existing parsers. Returns (title, body). Raises ImportError_."""
-        from import_raw_doc_to_okf import (
-            detect_file_type,
-            extract_text,
-            extract_title,
-        )
+        from document_import.converter import detect_file_type, extract_text, extract_title
 
         file_type = detect_file_type(temp_path)
         if file_type is None:
@@ -142,6 +144,12 @@ class ImportService:
         # --- parse + classify ---
         try:
             title, body = self._extract_text(temp_path)
+            converted = self._get_document_import().convert(temp_path, input_root=temp_path.parent)
+            okf_filename = f"{Path(safe_name).stem}.yaml"
+            self.storage.write_temp_content(doc_id, okf_filename, converted.okf_content)
+            raw_path = self.storage.temp_path(doc_id, safe_name)
+            if raw_path != self.storage.temp_path(doc_id, okf_filename) and raw_path.exists():
+                raw_path.unlink()
 
             classifier = self._get_classifier()  # may raise on model/config problems
             try:
@@ -157,6 +165,7 @@ class ImportService:
             record = {
                 "id": doc_id,
                 "original_filename": safe_name,
+                "stored_filename": okf_filename,
                 "storage_path": None,  # set on confirm
                 "import_state": STATE_PENDING,
                 "taxonomy_version": getattr(self, "_taxonomy_version", None),
@@ -166,6 +175,10 @@ class ImportService:
                 "classification_status": simplified,
                 "classification_source": SRC_AUTOMATIC,
                 "raw_status": md.get("classification_status"),
+                "level_scores": json.dumps(md.get("level_scores")) if md.get("level_scores") else None,
+                "document_body": body,
+                "file_size": len(data),
+                "source": "upload",
             }
             self.db.insert(record)
             log.info("[import] pending id=%s status=%s raw=%s path=%r",
@@ -198,7 +211,17 @@ class ImportService:
                                f"cannot confirm from state '{rec['import_state']}'")
 
         try:
-            storage_path = self.storage.finalize(doc_id, rec["original_filename"])
+            # Embed the converted OKF before finalizing it. This keeps the
+            # operation retryable if model/vector persistence fails.
+            from embedding_service.pipeline import EmbeddingPipelineService
+            from vector_service.chroma_store import ChromaStore
+
+            stored_filename = rec.get("stored_filename") or rec["original_filename"]
+            pending_okf = self.storage.temp_path(doc_id, stored_filename)
+            EmbeddingPipelineService(
+                model="bge_m3", vector_store=ChromaStore(model="bge_m3")
+            ).process_okf_file(pending_okf)
+            storage_path = self.storage.finalize(doc_id, stored_filename)
         except FileNotFoundError as exc:
             raise ImportError_("CONFIRMATION_FAILED", "pending file no longer exists") from exc
         except Exception as exc:  # noqa: BLE001

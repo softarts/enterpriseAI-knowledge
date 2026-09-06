@@ -25,12 +25,14 @@ Environment Variables:
                           (default: http://localhost:5173,http://127.0.0.1:5173).
 
 Document Import (MVP, single-file, synchronous):
+    CHAT_IMPORT_ROOT        - Root for imported OKF data and metadata
+                              (default: repository-root/import_data).
     CHAT_IMPORT_DB          - Path to the import metadata SQLite file
-                              (default: chat_service/import_data/documents.db).
-    CHAT_IMPORT_STORAGE_DIR - Root for finalized original files
-                              (default: chat_service/import_data/storage).
+                              (default: repository-root/import_data/documents.db).
+    CHAT_IMPORT_STORAGE_DIR - Root for finalized OKF files
+                              (default: repository-root/import_data/okf).
     CHAT_IMPORT_TEMP_DIR    - Root for pending uploads awaiting confirmation
-                              (default: chat_service/import_data/temp).
+                              (default: repository-root/import_data/temp).
     CHAT_IMPORT_MAX_MB      - Max upload size in MB (default: 25).
 """
 
@@ -102,12 +104,14 @@ class Settings:
         ]
 
         # --- Document Import (MVP: single-file, synchronous) ---
-        _import_root = Path(__file__).resolve().parent / "import_data"
+        _import_root = Path(os.environ.get(
+            "CHAT_IMPORT_ROOT", str(Path(__file__).resolve().parent.parent / "import_data")
+        ))
         self.import_db_path: Path = Path(
             os.environ.get("CHAT_IMPORT_DB", str(_import_root / "documents.db"))
         )
         self.import_storage_dir: Path = Path(
-            os.environ.get("CHAT_IMPORT_STORAGE_DIR", str(_import_root / "storage"))
+            os.environ.get("CHAT_IMPORT_STORAGE_DIR", str(_import_root / "okf"))
         )
         self.import_temp_dir: Path = Path(
             os.environ.get("CHAT_IMPORT_TEMP_DIR", str(_import_root / "temp"))

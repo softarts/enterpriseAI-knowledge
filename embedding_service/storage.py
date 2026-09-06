@@ -26,6 +26,17 @@ def save_embeddings_to_json(
             "content": item.content,
             "source_path": item.source_path,
             "embedding": item.embedding,
+            "version": item.version,
+            "chunk_index": item.chunk_index,
+            "heading_path": list(item.heading_path),
+            "content_hash": item.content_hash,
+            "token_count": item.token_count,
+            "chunk_version": item.chunk_version,
+            "embedding_model": item.embedding_model,
+            "embedding_dimension": item.embedding_dimension,
+            "normalized": item.normalized,
+            "offsets": list(item.offsets) if item.offsets is not None else None,
+            "document_metadata": item.document_metadata,
         }
         for item in embedded_chunks
     ]
@@ -56,6 +67,17 @@ def load_embeddings_from_json(file_path: Path) -> List[EmbeddedChunk]:
                 content=item["content"],
                 source_path=item["source_path"],
                 embedding=item["embedding"],
+                version=item.get("version"),
+                chunk_index=item.get("chunk_index", 0),
+                heading_path=tuple(item.get("heading_path", ()) or ()),
+                content_hash=item.get("content_hash", ""),
+                token_count=item.get("token_count", 0),
+                chunk_version=item.get("chunk_version", "v1"),
+                embedding_model=item.get("embedding_model"),
+                embedding_dimension=item.get("embedding_dimension"),
+                normalized=item.get("normalized"),
+                offsets=tuple(item["offsets"]) if item.get("offsets") is not None else None,
+                document_metadata=item.get("document_metadata", {}),
             )
         )
     logger.info("Loaded %d embeddings from %s", len(chunks), file_path)

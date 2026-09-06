@@ -23,13 +23,13 @@ from typing import Any, Dict, List, Optional
 
 import chromadb
 
-from embedding_service.config import EMBEDDING_DIMENSION
 from embedding_service.models import EmbeddedChunk
 from vector_service.config import (
     COLLECTION_NAME,
     DEFAULT_TOP_K,
     DEFAULT_VECTOR_DB_DIR,
     DISTANCE_SPACE,
+    collection_name_for_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,12 +73,15 @@ class ChromaStore:
     def __init__(
         self,
         db_dir: Optional[Path] = None,
-        collection_name: str = COLLECTION_NAME,
+        collection_name: Optional[str] = None,
+        model: str = "bge_m3",
     ) -> None:
         if db_dir is None:
             db_dir = PROJECT_ROOT / DEFAULT_VECTOR_DB_DIR
         self.db_dir = Path(db_dir).resolve()
-        self.collection_name = collection_name
+        self.model = model
+        self.collection_name = collection_name or collection_name_for_model(model)
+        self.dimension: Optional[int] = None
         self._client: Optional[chromadb.api.ClientAPI] = None
         self._collection = None
 
@@ -120,6 +123,14 @@ class ChromaStore:
         ids = [c.chunk_id for c in chunks]
         documents = [c.content for c in chunks]
         embeddings = [c.embedding for c in chunks]
+        expected = len(embeddings[0])
+        if self.dimension is not None and self.dimension != expected:
+            raise ValueError(f"Collection '{self.collection_name}' expects dimension {self.dimension}, got {expected}")
+        if any(len(vector) != expected for vector in embeddings):
+            raise ValueError("All vectors in one Chroma batch must have the same dimension")
+        recorded_dimensions = {c.embedding_dimension for c in chunks if c.embedding_dimension}
+        if recorded_dimensions and recorded_dimensions != {expected}:
+            raise ValueError("Embedding metadata dimension does not match vector dimension")
         metadatas = [
             {
                 # Chroma metadata values must be non-null scalars; coerce None
@@ -136,6 +147,7 @@ class ChromaStore:
             embeddings=embeddings,
             metadatas=metadatas,
         )
+        self.dimension = expected
         logger.info("Upserted %d chunks into '%s'", len(ids), self.collection_name)
         return len(ids)
 
@@ -201,5 +213,6 @@ class ChromaStore:
             "count": collection.count(),
             "persist_dir": str(self.db_dir),
             "distance_space": DISTANCE_SPACE,
-            "embedding_dimension": EMBEDDING_DIMENSION,
+            "embedding_dimension": self.dimension,
+            "model": self.model,
         }

@@ -1,0 +1,1163 @@
+[
+  {
+    "query_id": "Q001",
+    "query_text": "How does the organization recognize customer revenue and allocate transaction prices across deliverables?",
+    "category": "direct_semantic",
+    "difficulty": "medium",
+    "expected_document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+    "expected_heading": "Revenue Recognition and Billing Policies",
+    "matching_chunk_ids": [
+      "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-001-d1c49129eaf1"
+    ],
+    "hit_rank": 2,
+    "hit_at_1": false,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.5,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-002-d248da536d71",
+        "score": 0.6047,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-001-d1c49129eaf1",
+        "score": 0.5907,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": true
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-000-32698fbfb3d8",
+        "score": 0.5756,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-002-564a90b1d040",
+        "score": 0.5284,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-003-5aa7ea7ea3dc",
+        "score": 0.5072,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q002",
+    "query_text": "What criteria and scoring dimensions are used to evaluate operational runbooks during simulated recovery game days?",
+    "category": "direct_semantic",
+    "difficulty": "easy",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026",
+    "expected_heading": "Game Day Integration and Scoring Rubric:",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-001-7675b3cb12da"
+    ],
+    "hit_rank": 1,
+    "hit_at_1": true,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 1.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-001-7675b3cb12da",
+        "score": 0.6679,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Runbook Retention and Responder Onboarding Handbook",
+        "is_hit": true
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-003-89d56efc5820",
+        "score": 0.6655,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Narrow time window and request ID",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-000-ef8c00eea21d",
+        "score": 0.6171,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Runbook Retention and Responder Onboarding Handbook",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-002-aef199cb4560",
+        "score": 0.5764,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Runbook Retention and Responder Onboarding Handbook",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-000-b642992d06b8",
+        "score": 0.551,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Purpose",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q003",
+    "query_text": "What mandatory metadata attributes must be emitted on request spans to comply with telemetry observability guarantees?",
+    "category": "direct_semantic",
+    "difficulty": "medium",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026",
+    "expected_heading": "Operational behaviors (detailed):",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-001-89d2ddd73242"
+    ],
+    "hit_rank": 2,
+    "hit_at_1": false,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.5,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-000-81b14f2bc2ba",
+        "score": 0.6447,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-001-89d2ddd73242",
+        "score": 0.6145,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": true
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-002-564a90b1d040",
+        "score": 0.5968,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-003-5aa7ea7ea3dc",
+        "score": 0.5421,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-005-4b6d99543104",
+        "score": 0.5284,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Technical controls and requirements",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q004",
+    "query_text": "What is the end-to-end nomination, calibration, and timeline workflow for employee promotions and role transitions?",
+    "category": "direct_semantic",
+    "difficulty": "medium",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026",
+    "expected_heading": "Role transition and promotion process (summary):",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-001-b98ba8bdd8d4"
+    ],
+    "hit_rank": 3,
+    "hit_at_1": false,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.3333,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-000-f3850294f289",
+        "score": 0.6355,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-001-84d527a8339b",
+        "score": 0.6322,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-001-b98ba8bdd8d4",
+        "score": 0.6301,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": true
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-000-a6ec5cff57a4",
+        "score": 0.6258,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-000-0aaa4cabcba2",
+        "score": 0.6136,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q005",
+    "query_text": "What mandatory fields and digital signature components must be included in a compliance evidence bundle manifest?",
+    "category": "direct_semantic",
+    "difficulty": "easy",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+    "expected_heading": "Evidence bundle manifest (fields)",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-008-b44ac1311f4d"
+    ],
+    "hit_rank": 2,
+    "hit_at_1": false,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.5,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-014-a828c04f49ad",
+        "score": 0.6423,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Acceptance criteria for compliance reviewers",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-008-b44ac1311f4d",
+        "score": 0.63,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Evidence bundle manifest (fields)",
+        "is_hit": true
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-016-2062b7e0cdaf",
+        "score": 0.5566,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Appendix: common scenarios and notes",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-000-f303581ee0ac",
+        "score": 0.5532,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Purpose",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-001-b0379a0269b8",
+        "score": 0.5459,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Scope",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q006",
+    "query_text": "What are the core operational components and timelines for mentors and buddies supporting new team members?",
+    "category": "direct_semantic",
+    "difficulty": "medium",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026",
+    "expected_heading": "4) Mentorship, Sponsorship & Buddy System",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-001-6a063b2d4397"
+    ],
+    "hit_rank": 1,
+    "hit_at_1": true,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 1.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-001-6a063b2d4397",
+        "score": 0.6256,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": true
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-000-0aaa4cabcba2",
+        "score": 0.6114,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-002-9c3aef81ebdc",
+        "score": 0.6107,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-000-f3850294f289",
+        "score": 0.6074,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-010-e6135bb97fee",
+        "score": 0.6067,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Career Development and Calibration",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q007",
+    "query_text": "What target time-to-offer SLA is expected from requisition opening for individual contributor candidate hiring?",
+    "category": "direct_semantic",
+    "difficulty": "medium",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025",
+    "expected_heading": "Hiring and interview SLAs (operational targets)",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-001-84d527a8339b"
+    ],
+    "hit_rank": 3,
+    "hit_at_1": false,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.3333,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-002-e312357f2973",
+        "score": 0.5685,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-000-0aaa4cabcba2",
+        "score": 0.5543,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-001-84d527a8339b",
+        "score": 0.5529,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": true
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-003-1ac5179b9816",
+        "score": 0.5403,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-006-185100e743f5",
+        "score": 0.5315,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Hiring & Onboarding Handoff (recruiter → manager → team)",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q008",
+    "query_text": "What continuous learning stipends, wellness allowances, and retirement benefits are provided to employees?",
+    "category": "direct_semantic",
+    "difficulty": "easy",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028",
+    "expected_heading": "Benefits & Perks Quick Orientation (2028)",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-005-430afc9c90b1"
+    ],
+    "hit_rank": 1,
+    "hit_at_1": true,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 1.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-005-430afc9c90b1",
+        "score": 0.5769,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Benefits & Perks Quick Orientation (2028)",
+        "is_hit": true
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-001-84d527a8339b",
+        "score": 0.5151,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-002-e312357f2973",
+        "score": 0.509,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-000-0aaa4cabcba2",
+        "score": 0.4837,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-001-b98ba8bdd8d4",
+        "score": 0.4792,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q009",
+    "query_text": "How are newly assigned on-call engineers trained, shadowed, and certified before handling emergency production incidents independently?",
+    "category": "cross_document",
+    "difficulty": "hard",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026",
+    "expected_heading": "Responder Onboarding Checklist (for new on-call engineer):",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-001-7675b3cb12da"
+    ],
+    "hit_rank": 3,
+    "hit_at_1": false,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.3333,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-001-b98ba8bdd8d4",
+        "score": 0.5445,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-000-a6ec5cff57a4",
+        "score": 0.5205,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-001-7675b3cb12da",
+        "score": 0.5204,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Runbook Retention and Responder Onboarding Handbook",
+        "is_hit": true
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-002-8cdb6f034f4a",
+        "score": 0.5187,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-001-84d527a8339b",
+        "score": 0.5026,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q010",
+    "query_text": "How does the short-term micro-rotation assignment process operate for employees wishing to explore adjacent roles for a few weeks?",
+    "category": "cross_document",
+    "difficulty": "hard",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026",
+    "expected_heading": "3) Micro-rotation and Short-term Assignment Process",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-000-f3850294f289"
+    ],
+    "hit_rank": 1,
+    "hit_at_1": true,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 1.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-000-f3850294f289",
+        "score": 0.5893,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": true
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-000-a6ec5cff57a4",
+        "score": 0.5657,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-001-6a063b2d4397",
+        "score": 0.5609,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-001-b98ba8bdd8d4",
+        "score": 0.5596,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-003-1ac5179b9816",
+        "score": 0.5563,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q011",
+    "query_text": "What are the quantitative velocity targets and median benchmarks for provisioning access and merging a first pull request?",
+    "category": "cross_document",
+    "difficulty": "hard",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025",
+    "expected_heading": "Metrics and quality gates (people-ops KPIs)",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-002-8cdb6f034f4a"
+    ],
+    "hit_rank": null,
+    "hit_at_1": false,
+    "hit_at_3": false,
+    "hit_at_5": false,
+    "reciprocal_rank": 0.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-003-5aa7ea7ea3dc",
+        "score": 0.5525,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-014-43df478cd2fd",
+        "score": 0.5432,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Measurement and Continuous Improvement",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-001-89d2ddd73242",
+        "score": 0.5335,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-008-00af8a3c2c2b",
+        "score": 0.5228,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Internal Tools Access Matrix (essential items)",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-016-11d2fdd611e3",
+        "score": 0.5217,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Revision history",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q012",
+    "query_text": "What are the review frequencies, expiration policies, and retirement rules for operational service documentation?",
+    "category": "cross_document",
+    "difficulty": "medium",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026",
+    "expected_heading": "Runbook Review Cadence and Lifecycle:",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-000-ef8c00eea21d"
+    ],
+    "hit_rank": 4,
+    "hit_at_1": false,
+    "hit_at_3": false,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.25,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-001-7675b3cb12da",
+        "score": 0.5551,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Runbook Retention and Responder Onboarding Handbook",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-001-d1c49129eaf1",
+        "score": 0.5516,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026-chunk-002-e312357f2973",
+        "score": 0.5505,
+        "title": "Navigator Program: Career Operations and Onboarding Tooling",
+        "heading": "Navigator Program: Career Operations and Onboarding Tooling",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-000-ef8c00eea21d",
+        "score": 0.5432,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Runbook Retention and Responder Onboarding Handbook",
+        "is_hit": true
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-003-89d56efc5820",
+        "score": 0.5398,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Narrow time window and request ID",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q013",
+    "query_text": "What permissions and systems access are provisioned for new engineers across source control, cloud infrastructure, and identity providers?",
+    "category": "cross_document",
+    "difficulty": "medium",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028",
+    "expected_heading": "Internal Tools Access Matrix (essential items)",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-008-00af8a3c2c2b"
+    ],
+    "hit_rank": 5,
+    "hit_at_1": false,
+    "hit_at_3": false,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.2,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-001-b98ba8bdd8d4",
+        "score": 0.5628,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-000-a6ec5cff57a4",
+        "score": 0.545,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025-chunk-002-8cdb6f034f4a",
+        "score": 0.5208,
+        "title": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "heading": "talent-deep-dive-lifecycle-and-benchmarks-2025",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-001-a283a8d9abb9",
+        "score": 0.5207,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Scope and Audience",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028-chunk-008-00af8a3c2c2b",
+        "score": 0.5193,
+        "title": "Scaled Onboarding: First 90→1000 Playbook (2028)",
+        "heading": "Internal Tools Access Matrix (essential items)",
+        "is_hit": true
+      }
+    ]
+  },
+  {
+    "query_id": "Q014",
+    "query_text": "What governance stages and legal redline guardrails regulate commercial vendor contracts before execution?",
+    "category": "cross_document",
+    "difficulty": "medium",
+    "expected_document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+    "expected_heading": "Contract Lifecycle Management (CLM)",
+    "matching_chunk_ids": [
+      "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-001-d1c49129eaf1"
+    ],
+    "hit_rank": 2,
+    "hit_at_1": false,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.5,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-000-32698fbfb3d8",
+        "score": 0.5576,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-001-d1c49129eaf1",
+        "score": 0.5508,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": true
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-002-d248da536d71",
+        "score": 0.5257,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-003-0880a486a9be",
+        "score": 0.5144,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-003-5aa7ea7ea3dc",
+        "score": 0.4463,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q015",
+    "query_text": "What is the maximum dollar limit and retroactive approval window for emergency vendor spend during critical outages?",
+    "category": "specific_detail",
+    "difficulty": "easy",
+    "expected_document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+    "expected_heading": "Procurement Procedures",
+    "matching_chunk_ids": [
+      "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-000-32698fbfb3d8"
+    ],
+    "hit_rank": null,
+    "hit_at_1": false,
+    "hit_at_3": false,
+    "hit_at_5": false,
+    "reciprocal_rank": 0.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-002-d248da536d71",
+        "score": 0.5236,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-001-d1c49129eaf1",
+        "score": 0.5185,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-003-89d56efc5820",
+        "score": 0.5078,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Narrow time window and request ID",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-012-44c5b2432fd7",
+        "score": 0.5057,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Risk exceptions and approval workflow",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-003-0880a486a9be",
+        "score": 0.5009,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q016",
+    "query_text": "What is the maximum allowed number of priority classes a service can configure in its declared telemetry budget?",
+    "category": "specific_detail",
+    "difficulty": "easy",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026",
+    "expected_heading": "Standard requirements (high-level):",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-000-81b14f2bc2ba"
+    ],
+    "hit_rank": 2,
+    "hit_at_1": false,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 0.5,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-001-89d2ddd73242",
+        "score": 0.6675,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-000-81b14f2bc2ba",
+        "score": 0.6259,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": true
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-003-5aa7ea7ea3dc",
+        "score": 0.5995,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-002-564a90b1d040",
+        "score": 0.5984,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-002-d248da536d71",
+        "score": 0.48,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q017",
+    "query_text": "What target Mean Time to Evidence is required when assembling audit packages for high-priority security investigations?",
+    "category": "specific_detail",
+    "difficulty": "easy",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+    "expected_heading": "Metrics and KPIs",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-015-da3b927772d0"
+    ],
+    "hit_rank": 1,
+    "hit_at_1": true,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 1.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-015-da3b927772d0",
+        "score": 0.7222,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Metrics and KPIs",
+        "is_hit": true
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-011-3d287ef05d67",
+        "score": 0.5648,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Incident response integration",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-001-89d2ddd73242",
+        "score": 0.5551,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-007-4e67b86a8a5e",
+        "score": 0.5529,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Evidence assembly checklist",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-013-55c107ca8c37",
+        "score": 0.5521,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Operational runbooks and fast-play commands",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q018",
+    "query_text": "Who must approve formal policy exceptions and deviations when a team cannot meet standard data log storage durations?",
+    "category": "hard_negative",
+    "difficulty": "hard",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+    "expected_heading": "Risk exceptions and approval workflow",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-012-44c5b2432fd7"
+    ],
+    "hit_rank": 1,
+    "hit_at_1": true,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 1.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-012-44c5b2432fd7",
+        "score": 0.5448,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Risk exceptions and approval workflow",
+        "is_hit": true
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-003-89d56efc5820",
+        "score": 0.5166,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Narrow time window and request ID",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-002-564a90b1d040",
+        "score": 0.5066,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026-chunk-001-7675b3cb12da",
+        "score": 0.5038,
+        "title": "Runbook Retention and Responder Onboarding Handbook",
+        "heading": "Runbook Retention and Responder Onboarding Handbook",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026-chunk-001-89d2ddd73242",
+        "score": 0.5033,
+        "title": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "heading": "Tiered Priority Commitments and Telemetry Stability Standard",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q019",
+    "query_text": "What HTTP header carries the unique request tracking identifier for joining authentication decisions with backend access logs?",
+    "category": "hard_negative",
+    "difficulty": "hard",
+    "expected_document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+    "expected_heading": "Technical controls and requirements",
+    "matching_chunk_ids": [
+      "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-005-4b6d99543104"
+    ],
+    "hit_rank": 1,
+    "hit_at_1": true,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 1.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-005-4b6d99543104",
+        "score": 0.543,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Technical controls and requirements",
+        "is_hit": true
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-011-3d287ef05d67",
+        "score": 0.5117,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Incident response integration",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-009-3e7b0d065969",
+        "score": 0.4953,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Correlation playbook: step-by-step",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-006-c8caceb4873e",
+        "score": 0.4924,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Minimum event schema (example)",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028-chunk-001-b0379a0269b8",
+        "score": 0.482,
+        "title": "Authentication + Audit Evidence Correlation Playbook",
+        "heading": "Scope",
+        "is_hit": false
+      }
+    ]
+  },
+  {
+    "query_id": "Q020",
+    "query_text": "Which executive roles must authorize multi-year commitments or SaaS contracts exceeding quarter-million dollar thresholds?",
+    "category": "hard_negative",
+    "difficulty": "hard",
+    "expected_document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+    "expected_heading": "Approval Matrix (illustrative)",
+    "matching_chunk_ids": [
+      "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-000-32698fbfb3d8",
+      "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-001-d1c49129eaf1"
+    ],
+    "hit_rank": 1,
+    "hit_at_1": true,
+    "hit_at_3": true,
+    "hit_at_5": true,
+    "reciprocal_rank": 1.0,
+    "top_5_results": [
+      {
+        "rank": 1,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-001-d1c49129eaf1",
+        "score": 0.513,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": true
+      },
+      {
+        "rank": 2,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-002-d248da536d71",
+        "score": 0.4852,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 3,
+        "chunk_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026-chunk-001-b98ba8bdd8d4",
+        "score": 0.4706,
+        "title": "cross-functional-onboarding-and-career-support-compass-2026",
+        "heading": "cross-functional-onboarding-and-career-support-compass-2026",
+        "is_hit": false
+      },
+      {
+        "rank": 4,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-003-0880a486a9be",
+        "score": 0.4625,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": false
+      },
+      {
+        "rank": 5,
+        "chunk_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025-chunk-000-32698fbfb3d8",
+        "score": 0.4599,
+        "title": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "heading": "Procurement, Contract Lifecycle, and Revenue Controls Playbook",
+        "is_hit": true
+      }
+    ]
+  }
+]

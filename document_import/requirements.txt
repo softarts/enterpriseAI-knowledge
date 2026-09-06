@@ -1,0 +1,4 @@
+PyYAML
+pdfplumber
+python-docx
+beautifulsoup4

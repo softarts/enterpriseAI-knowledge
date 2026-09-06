@@ -7,7 +7,7 @@ export default function ClassificationBreadcrumb({ classification, status }) {
     return (
       <span className="breadcrumb breadcrumb--unknown" title="Taxonomy classifier could not determine a category">
         <span className="breadcrumb__unknown-icon">?</span>
-        暂未确定分类
+        Unclassified
       </span>
     );
   }
