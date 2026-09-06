@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 # Ensure project root is in sys.path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -111,6 +111,7 @@ def evaluate_retrieval(
     eval_path: Path,
     embedding_dir: Path,
     top_k: int = 5,
+    model_name: Optional[str] = None,
 ) -> List[QueryEvalResult]:
     """
     Run retrieval evaluation across all queries in the dataset.
@@ -132,9 +133,8 @@ def evaluate_retrieval(
     if not all_chunks:
         raise ValueError(f"No embedded chunks loaded from {embedding_dir}")
 
-    embedder = get_embedder()
+    embedder = get_embedder(model_name)
 
-    print("=" * 60)
     print("Retrieval Evaluation")
     print("=" * 60)
     print(f"Evaluation dataset: {eval_path.name}")
@@ -302,12 +302,20 @@ def main() -> None:
         default=5,
         help="Top-K cutoff for evaluation metrics (default: 5)",
     )
+    parser.add_argument(
+        "--model",
+        dest="model",
+        default=None,
+        choices=["bge_m3", "minilm"],
+        help="Embedding model name (default: configured active model)",
+    )
 
     args = parser.parse_args()
     evaluate_retrieval(
         eval_path=args.eval_path,
         embedding_dir=args.embedding_dir,
         top_k=args.top_k,
+        model_name=args.model,
     )
 
 

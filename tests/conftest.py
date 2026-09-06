@@ -10,7 +10,7 @@ import pytest
 def set_test_okf_dir(monkeypatch, request):
     # embedding_service tests are hermetic and intentionally do not initialize
     # doc_service's legacy retriever/model integration.
-    if "test_embedding" in str(request.node.fspath):
+    if "test_embedding" in str(request.node.fspath) or "test_document_import" in str(request.node.fspath):
         yield
         return
     """Point KB_OKF_DIR to the test fixtures directory."""

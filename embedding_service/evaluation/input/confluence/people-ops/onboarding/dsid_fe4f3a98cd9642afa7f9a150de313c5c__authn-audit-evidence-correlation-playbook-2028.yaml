@@ -1,0 +1,155 @@
+---
+document_id: confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028
+title: Authentication + Audit Evidence Correlation Playbook
+author: unknown
+created_at: '2026-04-22T18:24:00'
+updated_at: '2026-04-22T18:24:00'
+source_path: confluence/people-ops/onboarding/dsid_fe4f3a98cd9642afa7f9a150de313c5c__authn-audit-evidence-correlation-playbook-2028.txt
+source_type: text
+tags: []
+---
+
+# Authentication + Audit Evidence Correlation Playbook
+
+# Overview
+
+## Purpose
+This playbook defines a standardized, auditable process for correlating authentication/authorization (authN/authZ) events with system audit logs and data-residency markers to produce compact evidence bundles for compliance reviews and incident investigations. It reduces triage time, ensures reproducible evidence packages across regions, and documents retention controls that satisfy internal and external auditors.
+
+## Scope
+- Applies to Redwood-hosted control plane services, Dedicated control plane components, and Private deployment integrations managed by Redwood teams.
+- Covers: authN (login, token issuance), authZ (role checks, policy decisions), resource-access audit entries, data-residency attributes, and chain-of-custody metadata required for evidence packages.
+- Excludes third-party SaaS where vendor-managed logging is solely external — integration points are covered in related vendor onboarding docs.
+
+## Key definitions
+- AuthN event: identity verification occurrences (e.g., OAuth token issuance, SAML assertion, service identity key rotation).
+- AuthZ event: authorization decision or policy evaluation (e.g., ALLOW/DENY, role check outcome).
+- Evidence bundle: time-bounded set of log slices, policy snapshots, configuration hashes, and a signed manifest.
+- Residency marker: metadata attribute associated with a request or object that indicates geographic and legal residency constraints.
+
+## Owners & stakeholders
+- Security (primary): maintains playbook, reviews evidence schema.
+- Eng-sre: owns log retention and streaming pipelines.
+- Eng-platform: implements indexing and query endpoints.
+- Product/compliance: requests evidence for audits and supports exceptions.
+- Customer-success: request-facilitator for customer-facing evidence packages.
+
+## High-level flow
+1. Detection or request for evidence (audit, QBR, or incident).
+2. Determine scope: tenant(s), time window, environment(s), residency constraints.
+3. Query and filter authN/authZ indices.
+4. Correlate auth events with resource access audit entries and residency markers.
+5. Produce evidence bundle: logs, policy snapshot, configuration checksum, signed manifest.
+6. Store bundle in immutable evidence store (cataloged with retention policy), and notify requestor.
+
+## Technical controls and requirements
+- Per-tenant correlation keys: every request pipeline must inject a request-level correlation id (header: X-RW-REQ-ID) and an identity id (sub claim or service_id).
+- Event schemas: all services must emit structured JSON logs to the audit stream with fields: timestamp, service, env, tenant_id, request_id, identity_id, action, resource, decision, residency_marker.
+- Immutable evidence store: S3-backed bucket with object lock enabled (+WORM for regulated bundles), bucket-level MFA delete for cross-account restores.
+- Signing: manifests are signed by the security signing key (KMS/HSM).
+- Retention: default audit log retention is 7 years for regulated tenants; 90 days for standard tenants (policy-driven).
+
+## Minimum event schema (example)
+Note: the following block is a JSON-like event example used to validate parsers and must be emitted in raw log streams by services.
+
+{
+  "timestamp": "2028-05-01T14:22:41Z",
+  "service": "redwood-control-plane",
+  "env": "prod-us-west-2",
+  "tenant_id": "tenant-abc123",
+  "request_id": "rq-0001a2b3",
+  "identity_id": "user:alice@example.com",
+  "action": "model.infer",
+  "resource": "model:ggml-7b.v2",
+  "decision": "ALLOW",
+  "residency_marker": "EEA:NO_TRANSIT",
+  "meta": { "policy_version": "2028-03-10-rc1" }
+}
+
+## Evidence assembly checklist
+- [ ] Time window verified and timezone-normalized to UTC.
+- [ ] Tenant and environment filters applied.
+- [ ] AuthN/authZ event slice exported (minimum surrounding +/- 30s).
+- [ ] Resource-access audit slice exported (transaction-level).
+- [ ] Residency markers and object identifiers included.
+- [ ] Policy snapshot (policy code and version) included.
+- [ ] Config checksums (terraform plan/apply hashes) attached where relevant.
+- [ ] Manifest signed and uploaded to immutable store.
+- [ ] Evidence id issued and tracked in governance tracker.
+
+## Evidence bundle manifest (fields)
+- evidence_id: unique id (rw-evidence-YYYYMMDD-<seq>)
+- produced_by: team/service name
+- time_window: start/end UTC
+- tenant_ids: comma-separated list
+- artifacts: list of object paths (logs, snapshots, checksums)
+- residency_decl: text note of residency constraints
+- signing_key_id: KMS key alias
+- signature: base64 signature
+- retention_policy_tag: tag name
+
+## Correlation playbook: step-by-step
+1. Intake and scope
+   - Intake through the Evidence Portal or Security Pager.
+   - Validate caller permissions and record requester identity.
+   - Enforce least-privilege: only allow evidence requests with a business justification and an approval token for regulated tenants.
+2. Build queries
+   - Use request_id and identity_id as primary join keys.
+   - If request_id absent, fallback to windowed join using tenant_id + source_ip + approximate timestamp.
+   - For policy drift investigations, include policy_version in joins.
+3. Run correlation queries (examples)\   - LogQL (audit pipeline):
+     {service=\"redwood-control-plane\", tenant_id=\"tenant-abc123\"} | json | line_format | query request_id=rq-0001a2b3
+   - SQL on audit materialized view:
+     SELECT * FROM audit_events WHERE tenant_id='tenant-abc123' AND request_id='rq-0001a2b3';
+4. Validate residency constraints
+   - Cross-reference resource identifiers with the data-residency registry table.
+   - If residency_marker indicates restricted transit, ensure no cross-region logs or transfers are present in the window.
+5. Package and sign
+   - Assemble logs and policy snapshots into a tarball, produce manifest.json, sign via KMS/HSM.
+6. Publish and notify
+   - Upload to evidence store with retention tag and immutable flags, notify requestor and compliance via the Evidence Tracker ticket.
+
+## SDLC and deployment controls that enable evidence quality
+- CI gates: all changes that affect authN/authZ or audit schemas require: automated linting of schema, schema migration plan, compatibility tests (backfill/forward-compat), and security review approval.
+- Versioning: policy artifacts and RBAC role definitions are stored in git with tags formatted: policy/<service>/<semver>.
+- Build provenance: every deployment must attach build metadata (git_sha, pipeline_id, artifact_checksum) to the deployed configuration object retrievable by the evidence assembler.
+
+## Incident response integration
+- On incident page creation, Incident Commander chooses a prioritized evidence list (authN stream first, then authZ, then resource access, then infra events).
+- Triage runbook: immediate 0–15m actions include preserving the relevant audit topics (set them to non-retention or higher retention temporarily), snapshot configuration states, and trigger an evidence packaging job.
+- For cross-tenant incidents, the packaging job runs in a restricted Forensics workspace with JIT access and generates separate tenant-scoped bundles.
+
+## Risk exceptions and approval workflow
+- Exceptions (for example, shortened retention for non-critical staging tenants) must be requested using the Exception Request form and include compensating controls.
+- Exception approval path: Requestor -> Security reviewer -> Compliance approver -> Risk committee (for >90 days or production exceptions).
+- Approved exceptions are recorded in the Exception Register with: id, justification, owner, expiration date, compensating controls, and link to evidence artifacts if any.
+
+## Operational runbooks and fast-play commands
+- Preserve topic (kafka): rw-audit-prod-01 -> kafka-cli preserve --topic rw-audit-prod-01 --duration 72h --ticket <inc-id>
+- Query logs (GQL): /audit/query?tenant=tenant-abc123&from=2028-05-01T14:20Z&to=2028-05-01T14:25Z&filter=identity_id:alice@example.com
+- Create evidence package (cli): rw-evidence create --tenant tenant-abc123 --from 2028-05-01T14:20Z --to 2028-05-01T14:25Z --out /tmp/evidence-rw-0001.tar.gz --sign-with alias/security-evidence
+
+## Acceptance criteria for compliance reviewers
+- Evidence package contains: authN/authZ events, resource-access logs, policy snapshot (versioned), deployment provenance, signed manifest.
+- All items are checksum-verified and the manifest signature validates against a recognized KMS key.
+- Residency constraints are explicit and no evidence artifacts violate the stated residency policy.
+
+## Metrics and KPIs
+- Mean time to evidence (MTTE): target <= 4 hours for high-priority incidents.
+- Evidence completeness score: percent of packages that include all required artifacts (target >= 98%).
+- Packaging errors per 100 packages: target <= 0.5.
+
+## Appendix: common scenarios and notes
+1) Missing request_id: fall back to identity_id + source_ip + 60s window. Note in manifest that correlation was heuristic.
+2) Cross-region residency conflict: escalate to Legal and mark evidence bundle as restricted; do not export outside EEA if object marked EEA:NO_TRANSIT.
+3) Third-party logs: if vendor-managed, request vendor-signed export and include vendor attestation in manifest.
+
+## Related documents and templates
+- Exception Request template (link in Governance templates)
+- Evidence manifest template (JSON)
+- RBAC role lifecycle policy
+
+## Revision history
+- 2028-03-14: Initial draft by Alyssa Chen.
+- 2028-04-10: Added SDLC controls and KMS signing details (review: Marcus Patel).
+- 2028-05-02: Published — expanded runbook commands and clarified residency validation (review: Rina Alvarez, Samir Gupta).

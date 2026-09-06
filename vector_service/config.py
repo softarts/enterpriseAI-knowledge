@@ -8,7 +8,12 @@ Defaults for the Chroma persistent vector store.
 DEFAULT_VECTOR_DB_DIR = "vector_db"
 
 # Single collection holding all OKF chunk embeddings.
-COLLECTION_NAME = "okf_chunks"
+COLLECTION_NAME = "okf_chunks_bge_m3"
+
+
+def collection_name_for_model(model: str) -> str:
+    """Return a dimension-safe collection name for an embedding model."""
+    return f"okf_chunks_{model}"
 
 # Distance metric. Chunk embeddings are L2-normalized by the embedder, so cosine
 # distance is the natural choice (cosine distance = 1 - cosine similarity).

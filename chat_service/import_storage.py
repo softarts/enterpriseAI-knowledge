@@ -1,7 +1,7 @@
 """
 File storage for the Document Import feature (MVP).
 
-The original uploaded file is stored AS-IS (no OKF conversion). Layout uses a
+The converted OKF file is stored after import. Layout uses a
 fixed 256-way shard derived from the document UUID so no single directory grows
 unbounded, and taxonomy never influences the path (re-classifying never moves a
 file):
@@ -95,6 +95,13 @@ class ImportStorage:
         with open(target, "wb") as fh:
             fh.write(data)
         return target, safe
+
+    def write_temp_content(self, uuid: str, safe_filename: str, content: str) -> Path:
+        """Replace/create a pending file with converted OKF text."""
+        target = self.temp_path(uuid, safe_filename)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return target
 
     def finalize(self, uuid: str, safe_filename: str) -> str:
         """Move a pending temp file into permanent storage.

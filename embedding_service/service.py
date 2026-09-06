@@ -7,6 +7,8 @@ from doc_service.repositories.okf_document_repository import OKFDocumentReposito
 from embedding_service.chunker import Chunk, chunk_document
 from embedding_service.config import ACTIVE_MODEL, DEFAULT_EMBEDDING_DIR, DEFAULT_OKF_DIR
 from embedding_service.embedder import Embedder, get_embedder
+from document_import import parse_okf_file
+from embedding_service.main_import import build_embedding_text
 from embedding_service.models import EmbeddedChunk
 from embedding_service.storage import (
     load_all_embeddings,
@@ -83,11 +85,8 @@ class EmbeddingService:
             if not chunks:
                 continue
 
-            # Prepare text for embedding (incorporate title, heading and body content)
-            texts_to_embed = [
-                f"{c.title}\n{' > '.join(c.heading_path)}\n{c.content}".strip()
-                for c in chunks
-            ]
+            # Prepare text for embedding (incorporate title, heading and body content, Bug B fix)
+            texts_to_embed = [build_embedding_text(c) for c in chunks]
             vectors = self.embedder.embed_documents(texts_to_embed)
             self._validate_vectors(vectors)
 
@@ -129,10 +128,7 @@ class EmbeddingService:
         if file_path.suffix.lower() not in [".yaml", ".yml"]:
             return []
 
-        repo = OKFDocumentRepository(okf_dir=in_root)
-        record = repo._parse_okf_file(file_path)
-        if not record:
-            return []
+        record = parse_okf_file(file_path)
 
         chunks = chunk_document(
             document_id=record.document_id,
@@ -143,10 +139,7 @@ class EmbeddingService:
         if not chunks:
             return []
 
-        texts_to_embed = [
-            f"{c.title}\n{' > '.join(c.heading_path)}\n{c.content}".strip()
-            for c in chunks
-        ]
+        texts_to_embed = [build_embedding_text(c) for c in chunks]
         vectors = self.embedder.embed_documents(texts_to_embed)
         self._validate_vectors(vectors)
 

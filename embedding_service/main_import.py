@@ -19,7 +19,7 @@ import sys
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from doc_service.repositories.okf_document_repository import OKFDocumentRepository
+from document_import import parse_okf_file
 from embedding_service.chunker import Chunk, chunk_document
 from embedding_service.config import ACTIVE_MODEL, DEFAULT_EMBEDDING_DIR, DEFAULT_OKF_DIR
 from embedding_service.embedder import Embedder, get_embedder
@@ -90,6 +90,21 @@ def collect_okf_files(input_path: Path) -> List[Path]:
     return collected
 
 
+def build_embedding_text(chunk: Chunk) -> str:
+    """
+    Construct the text to embed for a chunk.
+    Only includes heading_path if it is non-empty and not identical to title.
+    Avoids duplicate title repetition (Bug B fix).
+    """
+    heading_str = " > ".join(chunk.heading_path).strip() if chunk.heading_path else ""
+    title = (chunk.title or "").strip()
+    content = (chunk.content or "").strip()
+
+    if heading_str and heading_str != title:
+        return f"{title}\n{heading_str}\n{content}".strip()
+    return f"{title}\n{content}".strip()
+
+
 def process_okf_document(
     file_path: Path,
     input_root: Path,
@@ -100,7 +115,7 @@ def process_okf_document(
 ) -> bool:
     """
     Parse an OKF document, generate chunks, compute embeddings, and save to JSON.
-    Uses existing OKF repository parser and heading-aware chunker.
+    Uses the document_import OKF parser and the common heading-aware chunker.
     Inherits document_id, title, source_path, and heading directly from OKF metadata.
     """
     if file_path.suffix.lower() not in [".yaml", ".yml"]:
@@ -108,11 +123,7 @@ def process_okf_document(
         return False
 
     try:
-        repo = OKFDocumentRepository(okf_dir=input_root)
-        record = repo._parse_okf_file(file_path)
-        if not record:
-            logger.warning("Failed to parse OKF document: %s", file_path)
-            return False
+        record = parse_okf_file(file_path)
 
         # Chunk using heading-aware chunker
         chunks: List[Chunk] = chunk_document(
@@ -126,11 +137,8 @@ def process_okf_document(
             logger.warning("No chunks generated for: %s", file_path)
             return False
 
-        # Embed all chunk texts
-        texts_to_embed = [
-            f"{c.title}\n{' > '.join(c.heading_path)}\n{c.content}".strip()
-            for c in chunks
-        ]
+        # Embed all chunk texts using deduplicated embedding text builder (Bug B fix)
+        texts_to_embed = [build_embedding_text(c) for c in chunks]
         vectors = embedder.embed_documents(texts_to_embed)
         if len(vectors) != len(chunks) or any(len(vector) != embedder.dimension for vector in vectors):
             raise ValueError(f"Embedding dimension mismatch for {embedder.model_name}")

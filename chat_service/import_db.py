@@ -39,6 +39,7 @@ SRC_MANUAL = "manual"
 _COLUMNS = [
     "id",
     "original_filename",
+    "stored_filename",
     "storage_path",
     "import_state",
     "taxonomy_version",
@@ -79,6 +80,7 @@ class ImportDB:
             CREATE TABLE IF NOT EXISTS documents_import (
                 id                     TEXT PRIMARY KEY,
                 original_filename      TEXT NOT NULL,
+                stored_filename        TEXT,
                 storage_path           TEXT,
                 import_state           TEXT NOT NULL,
                 taxonomy_version       TEXT,
@@ -105,6 +107,8 @@ class ImportDB:
             self._conn.execute("ALTER TABLE documents_import ADD COLUMN source TEXT")
         if "level_scores" not in existing:
             self._conn.execute("ALTER TABLE documents_import ADD COLUMN level_scores TEXT")
+        if "stored_filename" not in existing:
+            self._conn.execute("ALTER TABLE documents_import ADD COLUMN stored_filename TEXT")
         self._conn.commit()
 
     # ------------------------------------------------------------------

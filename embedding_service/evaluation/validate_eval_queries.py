@@ -6,16 +6,18 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from doc_service.repositories.okf_document_repository import OKFDocumentRepository
+from document_import import parse_okf_file
 
 
 def validate():
-    json_path = PROJECT_ROOT / "embedding_service" / "evaluation_queries.json"
-    okf_dir = PROJECT_ROOT / "generated"
+    json_path = Path(__file__).resolve().parent / "evaluation_queries.json"
+    okf_dir = Path(__file__).resolve().parent / "input"
+    if not okf_dir.exists():
+        okf_dir = PROJECT_ROOT / "generated"
 
     assert json_path.exists(), f"File not found: {json_path}"
     assert okf_dir.exists(), f"Directory not found: {okf_dir}"
@@ -31,11 +33,10 @@ def validate():
     assert len(queries) == 20, f"Expected exactly 20 queries, got {len(queries)}"
 
     # 2. Load OKF docs
-    repo = OKFDocumentRepository(okf_dir=okf_dir)
     files = list(okf_dir.rglob("*.yaml")) + list(okf_dir.rglob("*.yml"))
     doc_map = {}
     for fp in files:
-        rec = repo._parse_okf_file(fp)
+        rec = parse_okf_file(fp)
         if rec:
             doc_map[rec.document_id] = {
                 "source_path": rec.source_path,

@@ -7,15 +7,17 @@ import json
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from doc_service.repositories.okf_document_repository import OKFDocumentRepository
+from document_import import parse_okf_file
 
-OKF_DIR = PROJECT_ROOT / "generated"
-JSON_OUTPUT = PROJECT_ROOT / "embedding_service" / "evaluation_queries.json"
-MD_OUTPUT = PROJECT_ROOT / "embedding_service" / "evaluation_queries.md"
+OKF_DIR = Path(__file__).resolve().parent / "input"
+if not OKF_DIR.exists():
+    OKF_DIR = PROJECT_ROOT / "generated"
+JSON_OUTPUT = Path(__file__).resolve().parent / "evaluation_queries.json"
+MD_OUTPUT = Path(__file__).resolve().parent / "evaluation_queries.md"
 
 queries_data = [
     # =========================================================================
@@ -234,11 +236,10 @@ queries_data = [
 
 
 def validate_and_save():
-    repo = OKFDocumentRepository(okf_dir=OKF_DIR)
     files = list(OKF_DIR.rglob("*.yaml")) + list(OKF_DIR.rglob("*.yml"))
     doc_map = {}
     for fp in files:
-        rec = repo._parse_okf_file(fp)
+        rec = parse_okf_file(fp)
         if rec:
             doc_map[rec.document_id] = {
                 "source_path": rec.source_path,

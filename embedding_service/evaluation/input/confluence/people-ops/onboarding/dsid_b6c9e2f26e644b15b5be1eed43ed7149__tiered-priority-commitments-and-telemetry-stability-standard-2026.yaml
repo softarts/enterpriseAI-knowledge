@@ -1,0 +1,138 @@
+---
+document_id: confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026
+title: Tiered Priority Commitments and Telemetry Stability Standard
+author: unknown
+created_at: '2026-04-22T18:24:00'
+updated_at: '2026-04-22T18:24:00'
+source_path: confluence/people-ops/onboarding/dsid_b6c9e2f26e644b15b5be1eed43ed7149__tiered-priority-commitments-and-telemetry-stability-standard-2026.txt
+source_type: text
+tags: []
+---
+
+# Tiered Priority Commitments and Telemetry Stability Standard
+
+Summary:
+This document defines a cross-layer standard for (1) expressing and honoring tiered request priorities (priority commitments) from clients, and (2) guaranteeing the stability and fidelity of telemetry emitted as those priorities flow through Redwood’s serving layers. The goal is to enable predictable SLOs, fair capacity allocation, and reliable observability signals for downstream latency/cost analysis and incident response.
+
+Applicability and scope:
+- Applies to all public and internal inference APIs, streaming endpoints, and routing/fed-gateway components in Redwood’s hosted, dedicated, and private deployments.
+- Affects edge proxies, gateway services, request-routing orchestrators, runtime schedulers, KV/cache coordinators, and telemetry ingestion pipelines.
+- Does NOT change client-visible pricing tiers; it standardizes in-band hints and telemetry contracts used for capacity and incident decisions.
+
+Motivation:
+- Teams need stable telemetry so SLOs and incident detection rules are actionable across changing traffic mixes and model variants.
+- Priority hints are used for admission, batching, and preemption. Inconsistent handling or lossy telemetry breaks debugging and can produce unfair capacity allocation.
+- This standard reduces classification drift, limits metric cardinality explosion, and places clear SLAs on telemetry delivery and retention.
+
+Key definitions:
+1) Priority Commitment: A short-lived token attached to a request indicating relative importance (e.g., urgent, standard, background). This is advisory to downstream runtime but must be honored according to the policy below.
+2) Telemetry Stability: The guarantee that core priority-related fields (priority, client_tier, request_id, model_variant, route) are present and correctly propagated in 99.9% of emitted spans/metrics within 10s of request completion.
+3) Fidelity Budget: A per-service allowance describing how many priority variants are allowed and how long contextual fields may be sampled/aggregated.
+
+Standard requirements (high-level):
+- Priority signals MUST be surfaced via the canonical request headers: X-RW-Priority, X-RW-Client-Tier, X-RW-Priority-Nonce.
+- Edge/gateway MUST validate X-RW-Priority against the service’s allowed set and normalize values to the canonical enum: {urgent, high, standard, low, background}. Unknown values map to "standard" and produce a trace annotation.
+- Request-sampling and metric aggregation MUST include the normalized priority enum as a primary dimension for rate-limited metrics and as a label on traces.
+- Telemetry Stability SLO: 99.9% of requests must have the required priority metadata present in ingress->runtime spans; 99.0% of aggregated priority-tagged metrics must arrive in the telemetry topic within 30s of the request end.
+- Fidelity Budget per service is declared in service config (see table below). Services may set a maximum of 5 priority buckets; any attempt to use additional buckets must be approved by Platform Observability.
+
+Service configuration table (example):
+| field | type | example | notes |
+|-------|------|---------|-------|
+| service_name | string | runtime-frontend | canonical service id |
+| allowed_priorities | list | urgent,high,standard,low | max 5 items; unknown -> standard |
+| telemetry_timeout_slo | integer | 30 | time target for metric arrival |
+| propagation_mode | enum | strict / best-effort | strict = block if headers missing; best-effort = annotate only |
+| fidelity_budget | integer | 1000 | cardinality budget for priority-tagged keys per minute |
+
+Operational behaviors (detailed):
+1) Ingress validation and normalization:
+  - Edge proxies will validate incoming X-RW-Priority and map synonyms (e.g., "prio:1" -> "urgent").
+  - If propagation_mode is strict, requests missing X-RW-Priority are rejected with 400 and a human-friendly error. Strict mode is reserved for internal-only control planes.
+  - For best-effort propagation_mode (default for public API), proxies inject X-RW-Priority=standard and set trace annotation "rw.priority.inferred=true".
+
+2) Runtime honoring and backpressure:
+  - The runtime scheduler uses normalized priority to shape queues and choose preemption windows.
+  - Priority is advisory for batching: urgent/high should be eligible for smaller batch sizes to optimize latency. Background/low may be batched into larger windows.
+  - When capacity is constrained, runtime must enforce fair-share across client_tiers within each priority bucket, subject to tenant quotas.
+
+3) Telemetry emission guarantees:
+  - Spans: every service must include the following attributes on request spans: rw.priority, rw.client_tier, rw.request_nonce, rw.model_variant. Missing attributes are counted against the Telemetry Stability SLO.
+  - Metrics/Events: `rw.priority.request.count` and `rw.priority.latency.p50/p95/p99` must be emitted per-priority bucket at service-defined aggregation intervals (default 10s).
+  - Sampling: if span sampling is in effect, the sampler must be priority-aware (ensuring proportional representation across buckets).
+
+4) Cardinality and privacy controls:
+  - Client-provided free-text should never be used as a metric label. All client-visible strings must be normalized or hashed; the hashed form must be labeled `rw.client_hash` and not used in high-cardinality indices.
+  - Fidelity budgets limit the number of distinct priority-tagged combinations emitted. If the budget is exceeded, services should collapse low-frequency keys into an "other" bucket and annotate counts emitted.
+
+SLOs and error budgets (concrete):
+- Telemetry Stability SLO: 99.9% span attribute propagation (monthly) with a 3% monthly error budget for priority-related fields.
+- Metric Arrival SLO: 99.0% of priority-tagged metrics arrive within 30s (monthly).
+- Observability Alerting thresholds (examples):
+  1) Alert: Telemetry attr propagation drop: trigger if 0.5% of requests in a 5-minute sliding window are missing rw.priority. Pager: on-call runtime infra.
+  2) Alert: Priority metric backlog: trigger if >5 minute sustained lag in telemetry topic for priority metrics. Pager: telemetry ingestion SRE.
+
+Roles and ownership:
+- Service owner: responsible for declaring allowed_priorities and fidelity_budget in service config, ensuring local emitters comply, and performing correct normalization.
+- Platform Observability: enforces global allowed set, reviews fidelity_budget increase requests, and owns cross-service correlation tooling.
+- Runtime team: implements scheduler behaviors and preemption mechanics that honor normalized priority.
+- Edge/Gateway team: implements header validation and inference rules.
+
+Audit, compliance, and rollout steps:
+1) 30-day discovery: Inventory current services that emit priority-related telemetry. Capture existing headers and free-text labels.
+2) Medium-change rollout: Ship header normalization at edge and add trace annotations (no blocking). Run for 2 weeks.
+3) Enforcement rollout: Switch selected internal services to strict propagation_mode (reject missing) for 7 days. Validate client integrations.
+4) Global enforcement: After 60 days of validation, enable SLO-based alerting and fidelity_budget policing across all environments.
+
+Migration playbook (for service owners):
+1) Add allowed_priorities and fidelity_budget to your service config. Example YAML: 
+
+```yaml
+service_name: runtime-frontend
+allowed_priorities: [urgent, high, standard, low]
+telemetry_timeout_slo_s: 30
+propagation_mode: best-effort
+fidelity_budget: 1000
+```
+
+2) Instrument span and metric emitters to attach rw.priority and rw.client_tier as labels. Use client SDK helpers where available.
+3) Run preflight synthetic tests: send 10k requests evenly distributed across priority buckets; assert attribute presence >= 99.95% locally.
+4) Request fidelity_budget increase via Platform Observability: include traffic profile and justification.
+
+Debugging recipes (common incidents):
+- Missing priority attributes end-to-end: check edge normalization logs, then gateway-to-runtime header passthrough, then runtime emitter code. Use trace id referenced in the trace annotation `rw.priority.inferred=true`.
+- Metric bucket explosion: use the fidelity_budget telemetry diagnostic view to find top contributing keys; collapse using a rewrite table at the emitter.
+
+Examples and snippets:
+- Edge normalization example (pseudo-CLI):
+  curl -H 'X-RW-Priority: prio:1' -H 'X-API-Key: ...' https://api.redwood.ai/v1/generate
+  -> Edge rewrites header to X-RW-Priority: urgent and emits trace annotation `rw.priority.inferred=false`.
+
+- Telemetry consumer query example (PromQL-like):
+  sum(rate(rw_priority_request_count{priority="urgent"}[1m])) by (service)
+
+Consequences and trade-offs:
+- Limiting priority buckets reduces operational complexity and prevents label-cardinality explosion but requires teams to map fine-grained internal urgency models into a smaller set.
+- Strict propagation_mode increases correctness but may break older clients; a staged rollout mitigates risk.
+
+Open questions and proposals for future work:
+- Consider a bounded numeric priority score (0-100) in addition to buckets for finer admission control while keeping metrics grouped by bucket.
+- Evaluate automatic priority reclassification based on runtime latency/cost signals to reduce manual client changes.
+
+Appendix: checklist for service owners before enforcement cutoff:
+- [ ] Service config contains allowed_priorities and fidelity_budget
+- [ ] Emitters attach rw.priority and rw.client_tier to spans and metrics
+- [ ] Synthetic preflight shows attribute propagation >= 99.95%
+- [ ] Request reviewed fidelity_budget increase (if needed)
+
+Related artifacts and links:
+- Telemetry budget enrichment playbook (observability)
+- Request priority hinting protocol playbook (API standards)
+- Runtime preemption and batching guidelines (eng-serving-runtime)
+
+Document change log:
+- 2025-04-01 Created by Aisha Patel (draft)
+- 2025-06-15 Added fidelity budget examples and initial SLO targets (reviewed by Marco Giordano)
+- 2026-01-10 Clarified metric arrival window and added enforcement rollout plan (reviewed by Sofia Chen)
+
+Contact: engineering-observability@redwood.ai for questions or to request exceptions.

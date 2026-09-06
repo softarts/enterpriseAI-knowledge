@@ -1,5 +1,23 @@
 # 企业知识库（Enterprise Knowledge Base）
 
+## 当前文档导入流程
+
+```text
+原始文档 -> document_import -> OKF -> embedding_service pipeline
+          -> BGE-M3 chunk/embedding -> vector_service -> ChromaDB
+          -> okf_chunks_bge_m3
+```
+
+chat_service 默认把转换后的 OKF 保存到根目录 `import_data/okf`，可通过
+`CHAT_IMPORT_ROOT` 等配置覆盖；taxonomy 分类逻辑保持不变。详见
+[`document_import/README.md`](document_import/README.md)、
+[`embedding_service/README.md`](embedding_service/README.md)、
+[`vector_service/README.md`](vector_service/README.md) 和
+[`chat_service/README.md`](chat_service/README.md)。
+
+本次相关代码规模约为：`document_import` 736 行、`embedding_service` 1,138
+行、`vector_service` 384 行、chat 导入核心 235 行（包含注释和 docstring）。
+
 本项目通过 MCP 把 Kiro 与企业知识库的检索能力打通，形成最小闭环：
 
 ```
@@ -435,7 +453,12 @@ search_chroma (server.py:176)
 
 ---
 
-## Chat Playground（chat_service + 前端）
+## Chat Playground（详细说明已移至 chat_service/README.md）
+
+`chat_service` 的对话和文档导入详细实现、API、配置、存储和前端说明见
+[`chat_service/README.md`](chat_service/README.md)。根目录仅保留整体架构说明。
+
+<!--
 
 `chat_service/` 是一个独立的对话后端 + React 前端 playground，目前实现的是直连
 Hugging Face LLM 的单轮 Ask 流程：`question → HF LLM → answer + trace`。
@@ -557,6 +580,8 @@ python -m chat_service.run
 ```
 
 ---
+
+-->
 
 ## Taxonomy Classifier（逐篇分类器 / kb_classifier 阶段 B）
 
@@ -1190,7 +1215,9 @@ Document + Metadata
 
 ---
 
-# chat_service — Enterprise AI Playground（对话 + 文档导入）
+# chat_service — Enterprise AI Playground（详细内容已移至 chat_service/README.md）
+
+<!--
 
 `chat_service` 是一个**独立**的服务模块，实现了一个最小可用的 Enterprise AI
 Playground Web UI，并把前后端跑通。它与 `doc_service` / `vector_service` / MCP
@@ -1415,3 +1442,4 @@ step 之间保留了明确注释的 **RAG seam**。未来接入检索时：
 
 > 完整实现说明、验证结果与未实现功能清单见根目录
 > [`TASK_COMPLETION_REPORT_chat_service.md`](TASK_COMPLETION_REPORT_chat_service.md)。
+-->

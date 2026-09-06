@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 import pytest
 
+from embedding_service.chunker import Chunk
 from embedding_service.main_import import (
+    build_embedding_text,
     collect_okf_files,
     compute_output_path,
     process_okf_document,
@@ -127,3 +129,29 @@ Expenses and limits details.
     assert len(chunks) == 1
     assert chunks[0].document_id == "finance-policy"
     assert chunks[0].source_path == "finance/policy.txt"
+
+
+def test_build_embedding_text_deduplication():
+    # 1. Heading path identical to title -> only title and content, no title repetition
+    chunk_dup = Chunk(
+        chunk_id="c1", document_id="d1", title="Finance Policy",
+        heading="Finance Policy", content="Section content.", source_path="p",
+        heading_path=("Finance Policy",),
+    )
+    assert build_embedding_text(chunk_dup) == "Finance Policy\nSection content."
+
+    # 2. Heading path is empty -> only title and content
+    chunk_empty = Chunk(
+        chunk_id="c2", document_id="d1", title="Finance Policy",
+        heading=None, content="Section content.", source_path="p",
+        heading_path=(),
+    )
+    assert build_embedding_text(chunk_empty) == "Finance Policy\nSection content."
+
+    # 3. Heading path differs from title -> title, heading_path, content
+    chunk_diff = Chunk(
+        chunk_id="c3", document_id="d1", title="Finance Policy",
+        heading="Reimbursement", content="Section content.", source_path="p",
+        heading_path=("Finance Policy", "Reimbursement"),
+    )
+    assert build_embedding_text(chunk_diff) == "Finance Policy\nFinance Policy > Reimbursement\nSection content."
