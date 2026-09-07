@@ -231,6 +231,10 @@ okf_chunks_minilm
 评估工具位于 `embedding_service/evaluation/evaluate_retrieval.py`，评估 query 和
 标注相关文档之间的检索排名。当前评估数据位于 `evaluation/`。
 
+`evaluation/evaluation_sources.json` 是从 `evaluation_queries.json` 提取的 8 个唯一源
+文件清单。服务端可通过 `python -m chat_service.server_import_cli` 复用现有批量任务，
+完成 OKF、taxonomy、BGE-M3 embedding 和 ChromaDB 导入；这条路径不经过浏览器上传。
+
 ### Hit@K
 
 `Hit@K` 表示前 K 个结果中是否至少有一个正确结果：

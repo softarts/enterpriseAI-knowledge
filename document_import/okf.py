@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
+_DOCUMENT_ID_LINE_RE = re.compile(r"^document_id\s*:.*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,20 @@ def parse_okf_file(file_path: Path) -> OKFDocument:
         file_path=str(path),
         metadata=metadata,
     )
+
+
+def set_okf_document_id(okf_content: str, document_id: str) -> str:
+    """Replace the OKF identity while preserving its Markdown body."""
+    match = _FRONTMATTER_RE.match(okf_content)
+    if not match:
+        raise ValueError("No valid YAML frontmatter found")
+    frontmatter = match.group(1)
+    replacement = f"document_id: {document_id}"
+    if _DOCUMENT_ID_LINE_RE.search(frontmatter):
+        frontmatter = _DOCUMENT_ID_LINE_RE.sub(replacement, frontmatter, count=1)
+    else:
+        frontmatter = f"document_id: {document_id}\n{frontmatter}"
+    return f"---\n{frontmatter}\n---\n{match.group(2)}"
 
 
 def print_okf_record(file_path: Path) -> None:

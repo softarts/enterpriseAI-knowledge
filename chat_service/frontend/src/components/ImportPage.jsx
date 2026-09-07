@@ -1,6 +1,7 @@
 import UploadArea from "./UploadArea.jsx";
+import BatchUploadArea from "./BatchUploadArea.jsx";
 
-export default function ImportPage() {
+export default function ImportPage({ onOpenTasks }) {
   return (
     <div className="import-page">
       {/* Page header */}
@@ -22,6 +23,7 @@ export default function ImportPage() {
 
       {/* Main content */}
       <div className="import-page__body">
+        <BatchUploadArea onOpenTasks={onOpenTasks} />
         <UploadArea />
       </div>
     </div>

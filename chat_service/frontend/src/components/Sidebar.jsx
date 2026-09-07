@@ -2,6 +2,7 @@
 
 const MENU = [
   { key: "chat", label: "Chat", icon: "💬" },
+  { key: "tasks", label: "Tasks", icon: "⚙️" },
 ];
 
 const DOCUMENT_ITEMS = [

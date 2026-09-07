@@ -52,9 +52,23 @@ _COLUMNS = [
     "level_scores",
     "document_body",
     "file_size",
+    "content_hash",
     "source",
     "created_at",
     "updated_at",
+]
+
+_BATCH_COLUMNS = [
+    "task_id", "status", "stage", "total_files", "uploaded_files",
+    "processed_files", "failed_files", "error", "created_at", "updated_at",
+    "started_at", "completed_at",
+]
+_BATCH_FILE_COLUMNS = [
+    "file_id", "task_id", "document_id", "relative_path", "original_filename", "temp_path",
+    "status", "okf_path", "storage_path", "classification_status",
+    "taxonomy_version", "category_level_1", "category_level_2", "category_level_3",
+    "level_scores", "content_hash", "dedup_status", "duplicate_of",
+    "error", "retry_count", "created_at", "updated_at",
 ]
 
 
@@ -93,9 +107,56 @@ class ImportDB:
                 level_scores           TEXT,
                 document_body          TEXT,
                 file_size              INTEGER,
+                content_hash           TEXT,
                 source                 TEXT,
                 created_at             TEXT NOT NULL,
                 updated_at             TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS import_tasks (
+                task_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                total_files INTEGER NOT NULL,
+                uploaded_files INTEGER NOT NULL DEFAULT 0,
+                processed_files INTEGER NOT NULL DEFAULT 0,
+                failed_files INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS import_task_files (
+                file_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                document_id TEXT,
+                relative_path TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                temp_path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                okf_path TEXT,
+                storage_path TEXT,
+                classification_status TEXT,
+                taxonomy_version TEXT,
+                category_level_1 TEXT,
+                category_level_2 TEXT,
+                category_level_3 TEXT,
+                level_scores TEXT,
+                content_hash TEXT,
+                dedup_status TEXT NOT NULL DEFAULT 'new',
+                duplicate_of TEXT,
+                error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             """
         )
@@ -109,6 +170,29 @@ class ImportDB:
             self._conn.execute("ALTER TABLE documents_import ADD COLUMN level_scores TEXT")
         if "stored_filename" not in existing:
             self._conn.execute("ALTER TABLE documents_import ADD COLUMN stored_filename TEXT")
+        if "content_hash" not in existing:
+            self._conn.execute("ALTER TABLE documents_import ADD COLUMN content_hash TEXT")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_import_content_hash "
+            "ON documents_import(content_hash)"
+        )
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_import_content_hash_unique "
+            "ON documents_import(content_hash) WHERE content_hash IS NOT NULL"
+        )
+        task_file_existing = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(import_task_files)")
+        }
+        for column, definition in (
+            ("document_id", "TEXT"),
+            ("content_hash", "TEXT"),
+            ("dedup_status", "TEXT NOT NULL DEFAULT 'new'"),
+            ("duplicate_of", "TEXT"),
+        ):
+            if column not in task_file_existing:
+                self._conn.execute(
+                    f"ALTER TABLE import_task_files ADD COLUMN {column} {definition}"
+                )
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -130,6 +214,17 @@ class ImportDB:
     def get(self, doc_id: str) -> Optional[Dict[str, Any]]:
         row = self._conn.execute(
             "SELECT * FROM documents_import WHERE id = ?", (doc_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def find_by_content_hash(self, content_hash: str) -> Optional[Dict[str, Any]]:
+        """Return the first document imported from the exact same file bytes."""
+        if not content_hash:
+            return None
+        row = self._conn.execute(
+            "SELECT * FROM documents_import WHERE content_hash = "
+            "? ORDER BY created_at ASC LIMIT 1",
+            (content_hash,),
         ).fetchone()
         return dict(row) if row is not None else None
 
@@ -214,3 +309,58 @@ class ImportDB:
     def get_preview(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single document including its body (for preview)."""
         return self.get(doc_id)
+
+    # ------------------------------------------------------------------
+    # Async batch tasks
+    # ------------------------------------------------------------------
+    def create_task(self, task_id: str, total_files: int) -> None:
+        now = _now()
+        self._conn.execute(
+            "INSERT INTO import_tasks (task_id,status,stage,total_files,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+            (task_id, "queued", "upload", total_files, now, now),
+        )
+        self._conn.commit()
+
+    def add_task_file(self, record: Dict[str, Any]) -> None:
+        now = _now()
+        record = {**record, "created_at": now, "updated_at": now}
+        cols = [c for c in _BATCH_FILE_COLUMNS if c in record]
+        self._conn.execute(
+            f"INSERT INTO import_task_files ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
+            [record[c] for c in cols],
+        )
+        self._conn.commit()
+
+    def update_task(self, task_id: str, fields: Dict[str, Any]) -> None:
+        fields = {k: v for k, v in fields.items() if k in _BATCH_COLUMNS and k != "task_id"}
+        fields["updated_at"] = _now()
+        self._conn.execute(
+            f"UPDATE import_tasks SET {','.join(f'{k} = ?' for k in fields)} WHERE task_id = ?",
+            [*fields.values(), task_id],
+        )
+        self._conn.commit()
+
+    def update_task_file(self, file_id: str, fields: Dict[str, Any]) -> None:
+        fields = {k: v for k, v in fields.items() if k in _BATCH_FILE_COLUMNS and k != "file_id"}
+        fields["updated_at"] = _now()
+        self._conn.execute(
+            f"UPDATE import_task_files SET {','.join(f'{k} = ?' for k in fields)} WHERE file_id = ?",
+            [*fields.values(), file_id],
+        )
+        self._conn.commit()
+
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.execute("SELECT * FROM import_tasks WHERE task_id = ?", (task_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_task_files(self, task_id: str) -> List[Dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM import_task_files WHERE task_id = ? ORDER BY relative_path, file_id", (task_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM import_tasks ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]

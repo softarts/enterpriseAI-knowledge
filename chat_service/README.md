@@ -13,6 +13,147 @@ existing implementation and is not changed by this flow.
 
 代码规模：本次修改的导入服务核心约 235 行；chat_service 其他功能未重构。
 
+## 批量导入任务
+
+批量导入提供独立的任务页面和独立 worker 进程，不使用 Celery、Redis 或其他外部
+任务队列。任务状态保存在现有 SQLite 数据库的 `import_tasks` 和
+`import_task_files` 两张表中，因此用户离开页面后任务仍可继续，重新进入任务页面
+可以恢复状态。
+
+### 三个 Stage
+
+```text
+Stage 1 上传
+  目录拖拽 / 目录选择，或服务端 evaluation manifest CLI
+  -> 文件列表 + 相对路径登记
+  -> import_data/temp/tasks/{task_id}/
+  -> 所有文件进入 uploaded
+
+Stage 2 处理
+  独立 batch_worker 进程
+  -> DocumentImportService.convert()
+  -> TaxonomyClassifier.classify_text()
+  -> EmbeddingPipelineService.process_okf_file()
+  -> ChromaStore(okf_chunks_bge_m3)
+  -> OKF 移动到 import_data/okf/tasks/{task_id}/
+
+Stage 3 完成
+  -> 所有文件进入 completed 或 failed
+  -> 任务页面展示分类、OKF 路径、状态和错误
+```
+
+Stage 1 和 Stage 2 都记录已完成数量、总数量和百分比。Stage 2 每处理完一个文件
+就更新任务表；单文件失败只标记该文件为 `failed`，不会中断其他文件。
+
+### API
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| `POST` | `/api/tasks/batch-import` | 上传一批文件并创建任务 |
+| `GET` | `/api/tasks` | 查询任务列表 |
+| `GET` | `/api/tasks/{task_id}` | 查询任务、三个阶段和文件明细 |
+| `POST` | `/api/tasks/{task_id}/retry` | 手动重新执行失败文件 |
+
+上传接口接收 multipart `files` 和 JSON 字符串 `relative_paths`。前端
+`BatchUploadArea.jsx` 使用目录选择和目录拖拽收集文件；`TaskPage.jsx` 每 2.5 秒轮询
+任务详情，不依赖页面持续打开。
+
+### Evaluation source manifest CLI
+
+`embedding_service/evaluation/evaluation_queries.json` 是 query ground truth，不直接作为
+上传文件。`document_import.evaluation_manifest` 会提取其中唯一的
+`expected_source_path`，生成固定的 `embedding_service/evaluation/evaluation_sources.json`。
+当前 manifest 覆盖 20 条 query 和 8 个源文件；源文件默认位于 `all_documents/`，但 CLI
+通过参数接收 source root，不在代码中硬编码绝对路径。
+
+生成清单：
+
+```bash
+python -m document_import.evaluation_manifest \
+  --queries embedding_service/evaluation/evaluation_queries.json \
+  --source-root all_documents \
+  --output embedding_service/evaluation/evaluation_sources.json
+```
+
+在 server 文件系统上创建现有批量任务，不经过浏览器和 multipart 上传：
+
+```bash
+python -m chat_service.server_import_cli \
+  --manifest embedding_service/evaluation/evaluation_sources.json \
+  --source-root all_documents
+```
+
+使用 `--dry-run` 只校验文件和扩展名，不创建任务。CLI 只负责读取 server-local 文件并
+调用 `BatchImportService.create_task_from_paths()`；后续仍由同一个独立 worker、SQLite
+任务表和 Tasks 页面处理。
+
+### Worker 执行方式
+
+API 创建任务后启动：
+
+```bash
+python -m chat_service.batch_worker --task-id <task_id>
+```
+
+worker 代码位于 `chat_service/batch_worker.py`，处理逻辑位于
+`services/batch_import_service.py:BatchImportWorker`。worker 是独立进程，但任务表是
+唯一状态源；不考虑服务重启后的自动恢复，失败任务通过任务页面手动重试。
+
+### 数据表
+
+`import_tasks` 保存批次级状态：`task_id`、`status`、`stage`、总文件数、已上传数、
+已处理数、失败数、错误和时间字段。
+
+`import_task_files` 保存文件级状态：`file_id`、相对路径、临时路径、OKF 路径、最终
+存储路径、taxonomy 分类、错误、重试次数、原始文件 SHA-256 和状态。
+
+当前任务状态包括：`queued`、`running`、`completed`；文件状态包括
+`uploaded`、`converting`、`embedding`、`completed`、`duplicate`、`failed`。
+
+### 幂等和重复执行
+
+- 已完成文件在 worker 重复运行时跳过。
+- 失败文件通过 `POST /api/tasks/{task_id}/retry` 重置为 `uploaded`。
+- ChromaDB 使用稳定 chunk ID 做 upsert。
+- 后端只按原始文件字节计算 SHA-256 去重，不比较文件路径、文件名或标题。
+- 重复文件在 OKF 转换、taxonomy 和 embedding 之前标记为 `duplicate` 并跳过。
+- 批量任务中重复文件计入已处理数量，不阻塞其他文件。
+- 一个批次不依赖前端页面，允许 scheduler 直接调用 worker 命令。
+- 暂不实现服务重启后的自动恢复、并发锁和外部任务队列。
+
+### 内容去重
+
+单文件和批量导入都在后端计算原始上传内容的 SHA-256，并查询
+`documents_import.content_hash`。路径、原始文件名、标题和解析后的文本都不参与
+本次重复判断。已存在的内容直接返回已有导入记录，或者在批量任务中将文件标记为
+`duplicate`；不会再次转换 OKF、执行 taxonomy、生成 embedding 或写入 ChromaDB。
+
+本次按“内容相同就是重复文件”处理，因此不同路径下的相同文件也只保留一份向量数据。
+数据库仍保留批量任务中的重复文件状态，便于审计本次导入尝试。
+新内容会使用本次导入生成的独立 `document_id` 写入 OKF，确保旧内容的 chunk ID 和
+embedding 不会被覆盖。
+
+### 后续血缘关系事项（暂未实现）
+
+当前文件内容发生变化时，会按新内容执行一次新的导入；本次没有记录旧文件与新文件
+之间的血缘关系。后续如果需要版本链，应考虑增加 `parent_document_id`、稳定的
+`lineage_id`、版本时间和当前版本标记，同时决定检索默认返回全部版本还是仅当前版本。
+血缘字段应作为 metadata 保存，不应拼接进 chunk embedding 文本；旧文件的 OKF、chunk
+和 embedding 也不应被新版本覆盖。
+
+### 前端任务页面
+
+左侧任务列表分为“运行中”和“已完成”；点击任务后右侧显示四个统计信息和三个可展开
+Stage。点击每个 Stage 可以查看该阶段进度、文件计数和文件级状态。Stage 3 表格已经
+展示文件、状态、分类和存储位置；预览、修改分类和单文件重新处理入口暂时只保留后续
+扩展位置，当前不提供接口。
+
+### 相关代码规模
+
+本次批量任务相关代码约 650 行（包含后端任务 service/worker、SQLite 状态表、任务
+API、前端任务页面、目录上传组件和样式；包含注释和 docstring）。测试用例将在下一
+阶段补充。
+
 ## 服务职责与代码入口
 
 `chat_service` 是 FastAPI 后端和 React 前端 playground。对话入口是

@@ -65,8 +65,14 @@ export default function UploadArea({ onImportStarted }) {
       updateEntry(entryId, { phase: "classifying" });
       const doc = await importDocument(file);
       updateEntry(entryId, { doc, phase: "classified" });
-      // Show import result panel for the newly classified document
-      setActiveResult({ id: entryId, fileObj: file, doc });
+      if (doc.deduplicated) {
+        // The backend returned the existing record. Do not show the pending
+        // confirmation dialog or call confirm again for a duplicate file.
+        updateEntry(entryId, { phase: "done" });
+      } else {
+        // Show import result panel for the newly classified document.
+        setActiveResult({ id: entryId, fileObj: file, doc });
+      }
     } catch (e) {
       updateEntry(entryId, { phase: "error", error: e.message || "Import failed" });
     }

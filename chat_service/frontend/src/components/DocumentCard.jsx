@@ -38,6 +38,7 @@ function statusBadge(doc, phase) {
   if (phase === "classifying") return { label: "Classifying…", cls: "badge--classifying" };
   if (phase === "error") return { label: "Failed", cls: "badge--error" };
   if (phase === "confirming") return { label: "Confirming…", cls: "badge--uploading" };
+  if (doc?.deduplicated) return { label: "Skipped (duplicate)", cls: "badge--imported" };
   if (doc?.import_state === "imported") return { label: "Imported", cls: "badge--imported" };
   if (doc?.import_state === "pending") {
     return doc?.status === "unknown"

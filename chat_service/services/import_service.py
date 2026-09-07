@@ -22,6 +22,7 @@ through the embedding pipeline service.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import uuid as uuid_lib
 from pathlib import Path
@@ -37,6 +38,7 @@ from chat_service.import_db import (
     STATE_PENDING,
 )
 from chat_service.import_storage import ImportStorage, sanitize_filename
+from document_import import set_okf_document_id
 
 log = logging.getLogger("chat_import")
 
@@ -133,6 +135,13 @@ class ImportService:
         if ext not in settings.import_allowed_extensions:
             raise ImportError_("UPLOAD_FAILED", f"unsupported file extension: {ext or '(none)'}")
 
+        # Deduplicate on the exact uploaded bytes only. Filename, path and
+        # extracted title are deliberately not part of the identity.
+        content_hash = hashlib.sha256(data).hexdigest()
+        existing = self.db.find_by_content_hash(content_hash)
+        if existing is not None:
+            return {**existing, "_deduplicated": True}
+
         doc_id = str(uuid_lib.uuid4())
 
         # --- save original to temp storage (as-is) ---
@@ -146,7 +155,8 @@ class ImportService:
             title, body = self._extract_text(temp_path)
             converted = self._get_document_import().convert(temp_path, input_root=temp_path.parent)
             okf_filename = f"{Path(safe_name).stem}.yaml"
-            self.storage.write_temp_content(doc_id, okf_filename, converted.okf_content)
+            okf_content = set_okf_document_id(converted.okf_content, doc_id)
+            self.storage.write_temp_content(doc_id, okf_filename, okf_content)
             raw_path = self.storage.temp_path(doc_id, safe_name)
             if raw_path != self.storage.temp_path(doc_id, okf_filename) and raw_path.exists():
                 raw_path.unlink()
@@ -178,6 +188,7 @@ class ImportService:
                 "level_scores": json.dumps(md.get("level_scores")) if md.get("level_scores") else None,
                 "document_body": body,
                 "file_size": len(data),
+                "content_hash": content_hash,
                 "source": "upload",
             }
             self.db.insert(record)

@@ -17,9 +17,9 @@ HTTP status. Internal details / stack traces are never exposed.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from chat_service.import_db import CLS_UNKNOWN, STATE_IMPORTED
 from chat_service.models import (
@@ -32,12 +32,14 @@ from chat_service.models import (
     TaxonomyResponse,
 )
 from chat_service.services.import_service import ImportError_, ImportService
+from chat_service.services.batch_import_service import BatchImportService
 
 router = APIRouter()
 
 # One shared service instance. Heavy deps (classifier + bge-m3) load lazily on
 # the first import request, so this does not slow app startup or /api/chat.
 _import_service = ImportService()
+_batch_service = BatchImportService()
 
 # Map domain error codes -> HTTP status.
 _STATUS_FOR_CODE = {
@@ -89,6 +91,8 @@ def _to_response(rec: Dict[str, Any]) -> ImportDocumentResponse:
         document_body=rec.get("document_body"),
         file_size=rec.get("file_size"),
         source=rec.get("source"),
+        content_hash=rec.get("content_hash"),
+        deduplicated=bool(rec.get("_deduplicated", False)),
         created_at=rec.get("created_at"),
         updated_at=rec.get("updated_at"),
     )
@@ -112,6 +116,50 @@ async def import_document(file: UploadFile = File(...)) -> ImportDocumentRespons
     except ImportError_ as err:
         raise _fail(err)
     return _to_response(rec)
+
+
+@router.post("/api/tasks/batch-import")
+async def create_batch_import(
+    files: list[UploadFile] = File(...),
+    relative_paths: str = Form("[]"),
+) -> Dict[str, Any]:
+    """Upload a directory file list and start the independent worker."""
+    try:
+        paths = json.loads(relative_paths)
+        if not isinstance(paths, list):
+            paths = []
+    except json.JSONDecodeError:
+        paths = []
+    items = []
+    for index, upload in enumerate(files):
+        data = await upload.read()
+        items.append((paths[index] if index < len(paths) else upload.filename or "file",
+                      upload.filename or "file", data))
+    try:
+        return _batch_service.create_task(items)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "BATCH_UPLOAD_FAILED", "message": str(exc)})
+
+
+@router.get("/api/tasks")
+def list_tasks(limit: int = Query(100, ge=1, le=200)) -> List[Dict[str, Any]]:
+    return _batch_service.list(limit)
+
+
+@router.get("/api/tasks/{task_id}")
+def get_task(task_id: str) -> Dict[str, Any]:
+    try:
+        return _batch_service.detail(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail={"code": "TASK_NOT_FOUND", "message": task_id})
+
+
+@router.post("/api/tasks/{task_id}/retry")
+def retry_task(task_id: str) -> Dict[str, Any]:
+    try:
+        return _batch_service.retry_failed(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail={"code": "TASK_NOT_FOUND", "message": task_id})
 
 
 @router.get("/api/documents", response_model=DocumentListResponse)

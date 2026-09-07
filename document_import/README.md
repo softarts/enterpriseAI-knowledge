@@ -127,6 +127,19 @@ python -m document_import.cli --input all_documents --output import_data/okf
 python import_raw_doc_to_okf.py --input all_documents --output import_data/okf
 ```
 
+## Evaluation source manifest
+
+`evaluation_manifest.py` 从 `embedding_service/evaluation/evaluation_queries.json` 提取
+唯一的 `expected_source_path`，生成可重复使用的源文件清单。它只负责清单生成和文件
+存在性校验；实际导入由 `chat_service.server_import_cli` 创建现有批量任务完成。
+
+```bash
+python -m document_import.evaluation_manifest \
+  --queries embedding_service/evaluation/evaluation_queries.json \
+  --source-root all_documents \
+  --output embedding_service/evaluation/evaluation_sources.json
+```
+
 ## OKF 设计
 
 OKF 将结构化 metadata 与 Markdown 正文放在同一个文件中：

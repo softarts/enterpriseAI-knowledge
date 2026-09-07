@@ -67,6 +67,8 @@ class ImportDocumentResponse(BaseModel):
     )
     file_size: Optional[int] = Field(None, description="Original file size in bytes")
     source: Optional[str] = Field(None, description="Document source, e.g. 'upload'")
+    content_hash: Optional[str] = None
+    deduplicated: bool = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
