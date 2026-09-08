@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from chat_service.config import settings
 from chat_service.import_db import ImportDB
 from chat_service.import_storage import sanitize_filename
+from document_import import parse_okf_file, set_okf_document_id
 
 
 class BatchImportService:
@@ -39,13 +40,14 @@ class BatchImportService:
             content_hash = hashlib.sha256(data).hexdigest()
             existing = self.db.find_by_content_hash(content_hash)
             duplicate_of = existing["id"] if existing else seen_hashes.get(content_hash)
+            document_id = content_hash
             file_id = str(uuid.uuid4())
             if duplicate_of:
                 duplicate_count += 1
             else:
-                seen_hashes[content_hash] = file_id
+                seen_hashes[content_hash] = document_id
             self.db.add_task_file({
-                "file_id": file_id, "task_id": task_id, "document_id": file_id,
+                "file_id": file_id, "task_id": task_id, "document_id": document_id,
                 "relative_path": relative_path or original_name,
                 "original_filename": sanitize_filename(original_name),
                 "temp_path": str(target),
@@ -135,7 +137,7 @@ class BatchImportWorker:
         if task is None:
             raise ValueError(f"unknown task: {task_id}")
         from chat_service.services.import_service import ImportService
-        from document_import import DocumentImportService, parse_okf_file, set_okf_document_id
+        from document_import import DocumentImportService
         from embedding_service.pipeline import EmbeddingPipelineService
         from vector_service.chroma_store import ChromaStore
 

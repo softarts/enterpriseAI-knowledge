@@ -80,12 +80,14 @@ python -m document_import.evaluation_manifest \
 ```bash
 python -m chat_service.server_import_cli \
   --manifest embedding_service/evaluation/evaluation_sources.json \
-  --source-root all_documents
+  --wait
 ```
 
-使用 `--dry-run` 只校验文件和扩展名，不创建任务。CLI 只负责读取 server-local 文件并
-调用 `BatchImportService.create_task_from_paths()`；后续仍由同一个独立 worker、SQLite
-任务表和 Tasks 页面处理。
+manifest 的 `source_path` 使用绝对路径，`source_path_key` 作为稳定的逻辑来源标识。
+使用 `--dry-run` 只校验文件、扩展名和 content hash，不创建任务；`--wait` 等待独立
+worker 完成并返回最终统计。CLI 只负责读取 server-local 文件并调用
+`BatchImportService.create_task_from_paths()`；后续仍由同一个独立 worker、SQLite 任务表
+和 Tasks 页面处理。
 
 ### Worker 执行方式
 
@@ -130,16 +132,29 @@ worker 代码位于 `chat_service/batch_worker.py`，处理逻辑位于
 
 本次按“内容相同就是重复文件”处理，因此不同路径下的相同文件也只保留一份向量数据。
 数据库仍保留批量任务中的重复文件状态，便于审计本次导入尝试。
-新内容会使用本次导入生成的独立 `document_id` 写入 OKF，确保旧内容的 chunk ID 和
-embedding 不会被覆盖。
+当前采用方案 A：新内容使用原始文件的完整 SHA-256 作为稳定的 `document_id` 写入
+OKF。这样相同字节内容会得到相同的 document/chunk identity；不同内容会得到新的
+document ID，旧内容的 chunk ID 和 embedding 不会被覆盖。文件实际保存名不再承担
+document identity，必要时可以使用 content hash 作为保存名的一部分。
 
-### 后续血缘关系事项（暂未实现）
+### 后续文档版本血缘关系（方案 B，暂未实现）
 
-当前文件内容发生变化时，会按新内容执行一次新的导入；本次没有记录旧文件与新文件
-之间的血缘关系。后续如果需要版本链，应考虑增加 `parent_document_id`、稳定的
-`lineage_id`、版本时间和当前版本标记，同时决定检索默认返回全部版本还是仅当前版本。
-血缘字段应作为 metadata 保存，不应拼接进 chunk embedding 文本；旧文件的 OKF、chunk
-和 embedding 也不应被新版本覆盖。
+当前文件内容发生变化时，按方案 A 作为新内容导入，不尝试删除或替换旧内容。
+如果将来需要识别“同一逻辑文件的不同版本”，可以使用 `source_path_key` 作为
+候选文档身份，再结合以下信号进行确认：
+
+- `source_path_key`：判断是否来自同一逻辑源文件；
+- title 和正文内容的 embedding 相似度：判断标题和内容是否具有版本连续性；
+- taxonomy 分类结果：判断文档所属主题和业务分类是否一致；
+- 原始文件名、来源和时间等 metadata：作为辅助证据，不作为唯一判据。
+
+其中，`source_path_key` 适合做候选分组，但不能单独证明两个文件是同一版本链；
+embedding 和 taxonomy 也应作为组合信号，而不是单独决定版本关系。未来可以增加
+`lineage_id`、`parent_document_id`、版本时间、相似度分数和 `is_current` 等字段，
+并明确检索默认返回全部版本还是仅当前版本。
+
+血缘字段应作为 metadata 保存，不应拼接进 chunk embedding 文本。启用版本替换前，
+仍应保留旧文件的 OKF、chunk 和 embedding，并通过独立维护命令决定何时清理旧数据。
 
 ### 前端任务页面
 

@@ -1,0 +1,23 @@
+{
+  "classification_status": "FALLBACK",
+  "classification_depth": 3,
+  "category_path_keys": [
+    "technology_engineering",
+    "site_reliability_observability",
+    "alerting_on_call_rotation"
+  ],
+  "category_path_names": [
+    "Technology & Engineering",
+    "Site Reliability & Observability",
+    "Alerting & On-Call Rotation"
+  ],
+  "category_breadcrumb": "Technology & Engineering > Site Reliability & Observability > Alerting & On-Call Rotation",
+  "level_scores": {
+    "L1": 0.419979,
+    "L2": 0.566314,
+    "L3": 0.637221
+  },
+  "l1_key": "technology_engineering",
+  "l2_key": "site_reliability_observability",
+  "l3_key": "alerting_on_call_rotation"
+}

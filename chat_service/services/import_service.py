@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
-import uuid as uuid_lib
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -142,7 +141,9 @@ class ImportService:
         if existing is not None:
             return {**existing, "_deduplicated": True}
 
-        doc_id = str(uuid_lib.uuid4())
+        # Content identity is stable across repeated imports and independent of
+        # the original filename or upload path.
+        doc_id = content_hash
 
         # --- save original to temp storage (as-is) ---
         try:

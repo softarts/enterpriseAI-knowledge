@@ -10,6 +10,7 @@ or:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from chat_service.api.routes_ask import router as ask_router
 from chat_service.api.routes_chat import router as chat_router
 from chat_service.api.routes_import import router as import_router
 from chat_service.config import settings
@@ -18,8 +19,7 @@ app = FastAPI(
     title="Enterprise AI Playground — chat_service",
     description=(
         "Standalone backend for the Enterprise AI Playground UI. "
-        "v1 implements a direct Ask flow: question -> Hugging Face LLM -> "
-        "answer + extensible trace. No RAG / Chroma / MCP yet."
+        "Chat: direct HF LLM. Ask: RAG pipeline (qa_service, LangChain + ChromaDB)."
     ),
     version=settings.version,
 )
@@ -34,4 +34,5 @@ app.add_middleware(
 )
 
 app.include_router(chat_router, tags=["Chat"])
+app.include_router(ask_router, tags=["Ask (RAG)"])
 app.include_router(import_router, tags=["Document Import"])

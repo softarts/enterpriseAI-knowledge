@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -22,9 +23,8 @@ def build_manifest(query_file: Path, source_root: Path) -> Dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for query in queries:
         source_path = str(query.get("expected_source_path", "")).strip()
-        document_id = str(query.get("expected_document_id", "")).strip()
-        if not source_path or not document_id:
-            raise ValueError(f"query {query.get('id', '<unknown>')} lacks source path or document ID")
+        if not source_path:
+            raise ValueError(f"query {query.get('id', '<unknown>')} lacks source path")
         relative = Path(source_path)
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"source path escapes source root: {source_path}")
@@ -33,22 +33,26 @@ def build_manifest(query_file: Path, source_root: Path) -> Dict[str, Any]:
     files = []
     for source_path in sorted(grouped):
         queries_for_file = grouped[source_path]
-        document_ids = {str(q["expected_document_id"]) for q in queries_for_file}
-        if len(document_ids) != 1:
-            raise ValueError(f"source path maps to multiple document IDs: {source_path}")
         resolved = (root / source_path).resolve()
         if not resolved.is_relative_to(root) or not resolved.is_file():
             raise FileNotFoundError(f"source file does not exist under {root}: {source_path}")
+        content_hash = hashlib.sha256(resolved.read_bytes()).hexdigest()
         files.append({
-            "source_path": source_path,
-            "document_id": next(iter(document_ids)),
+            "source_path": str(resolved),
+            "source_path_key": Path(source_path).as_posix(),
+            "content_hash": f"sha256:{content_hash}",
             "query_ids": sorted(str(q["id"]) for q in queries_for_file),
             "expected_headings": sorted({str(q.get("expected_heading", "")) for q in queries_for_file if q.get("expected_heading")}),
+            "expected_evidence": {
+                str(q["id"]): q.get("expected_evidence", [])
+                for q in queries_for_file
+                if q.get("expected_evidence")
+            },
         })
 
     return {
-        "version": "1.0",
-        "manifest_id": "evaluation-sources-v1",
+        "version": "2.0",
+        "manifest_id": "evaluation-sources-v2",
         "query_file": str(Path(query_file)),
         "query_count": len(queries),
         "file_count": len(files),

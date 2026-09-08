@@ -1,0 +1,26 @@
+18:25:07 INFO    [taxonomy_classifier] command=file taxonomy_version=None thresholds=None
+18:25:07 INFO    [taxonomy_classifier] constructing classifier ...
+18:25:07 INFO    [taxonomy] pinned taxonomy = taxonomy_v7.py
+18:25:07 INFO    [anchors] loaded 297 cached anchor vectors from D:\work\enterpriseAI-knowledge\kb_classifier\work\anchor_embeddings.npz
+18:25:07 INFO    [taxonomy_classifier] ready: taxonomy=taxonomy_v7.py (297 anchors), thresholds L1=0.4731 L2=0.4412 L3=0.4507
+18:25:07 INFO    [taxonomy_classifier] reading file: all_documents\confluence\company-handbook\04_hiring-and-onboarding\dsid_2b4e04d1e9784e84aba754e279cc3bec__alert-fatigue-tuning-through-telemetry-deduplication-retrospective-2025.txt
+18:25:07 INFO    [taxonomy_classifier] parsed file: title='alert-fatigue-tuning-through-telemetry-deduplication-retrospective' body_len=8069
+18:25:07 INFO    [taxonomy_classifier] classify_text: title='alert-fatigue-tuning-through-telemetry-deduplication-retrospective' body_len=8069
+18:25:07 INFO    [taxonomy_classifier] classify_documents: 1 document(s)
+18:25:07 INFO    [embed] encode_documents: rendering embed_text for 1 doc(s)
+18:25:07 INFO    [embed] encode_texts: encoding 1 text(s) (batch_size=8) ...
+18:25:20 INFO    [embed] loading BAAI/bge-m3 on cpu (fp16=False) ...
+18:26:09 INFO    [embed] attempting high-level SentenceTransformer load ...
+Loading weights:   0%|          | 0/391 [00:00<?, ?it/s]Loading weights: 100%|¨€¨€¨€¨€¨€¨€¨€¨€¨€¨€| 391/391 [00:00<00:00, 4476.45it/s]
+18:26:27 INFO    [embed] high-level load succeeded
+D:\work\enterpriseAI-knowledge\kb_classifier\common\embedder.py:324: FutureWarning: The `get_sentence_embedding_dimension` method has been renamed to `get_embedding_dimension`.
+  self._dim = model.get_sentence_embedding_dimension()
+18:26:27 INFO    [embed] model ready in 67.3s (dim=1024, max_seq_length=512)
+18:26:35 INFO    [embed] encode_texts: done in 88.5s -> shape (1, 1024)
+18:26:35 INFO    [taxonomy_classifier] classify_vectors: matching (1, 1024) against 297 anchors
+18:26:35 INFO    [match] matching 1 documents against 297 anchors (17 L1) in batches of 50000
+18:26:35 INFO    [match]   matched rows [0,1)
+18:26:35 INFO    [taxonomy_classifier] L1 gate failed (best L1=risk_compliance score=0.4341 < 0.4731); trying deep fallback
+18:26:35 INFO    [taxonomy_classifier] deep fallback: selected L3 alerting_on_call_rotation (score=0.6372) -> path=Technology & Engineering > Site Reliability & Observability > Alerting & On-Call Rotation
+18:26:35 INFO    [taxonomy_classifier] classify_vectors: produced 1 classification(s)
+18:26:35 INFO    [taxonomy_classifier] -> status=FALLBACK depth=3 path='Technology & Engineering > Site Reliability & Observability > Alerting & On-Call Rotation'

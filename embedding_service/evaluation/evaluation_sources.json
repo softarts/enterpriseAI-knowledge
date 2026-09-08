@@ -1,57 +1,99 @@
 {
-  "version": "1.0",
-  "manifest_id": "evaluation-sources-v1",
+  "version": "2.0",
+  "manifest_id": "evaluation-sources-v2",
   "query_file": "embedding_service/evaluation/evaluation_queries.json",
   "query_count": 20,
   "file_count": 8,
   "files": [
     {
-      "source_path": "confluence/finance-and-legal/dsid_135ae39cdcd342e5b9c65190c87dd6ae__procurement-contracts-and-revrec-playbook-2025.txt",
-      "document_id": "confluence-finance-and-legal-dsid-135ae39cdcd342e5b9c65190c87dd6ae-procurement-contracts-and-revrec-playbook-2025",
+      "source_path": "D:\\work\\enterpriseAI-knowledge\\all_documents\\confluence\\finance-and-legal\\dsid_135ae39cdcd342e5b9c65190c87dd6ae__procurement-contracts-and-revrec-playbook-2025.txt",
+      "source_path_key": "confluence/finance-and-legal/dsid_135ae39cdcd342e5b9c65190c87dd6ae__procurement-contracts-and-revrec-playbook-2025.txt",
+      "content_hash": "sha256:b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0",
       "query_ids": ["Q001", "Q014", "Q015", "Q020"],
-      "expected_headings": ["Approval Matrix (illustrative)", "Contract Lifecycle Management (CLM)", "Procurement Procedures", "Revenue Recognition and Billing Policies"]
+      "expected_headings": ["Approval Matrix (illustrative)", "Contract Lifecycle Management (CLM)", "Procurement Procedures", "Revenue Recognition and Billing Policies"],
+      "expected_evidence": {
+        "Q001": ["ASC 606", "Identify performance obligations", "Allocate price to performance obligations", "Recognize revenue when performance obligations are satisfied"],
+        "Q014": ["Contract Lifecycle Management (CLM)", "Legal review", "redline", "signature authority"],
+        "Q015": ["emergency procurement", "up to $100k", "retroactive sign-off from Finance within 48 hours"],
+        "Q020": ["Strategic / Multi-year commitments", "> $250k", "CFO + General Counsel"]
+      }
     },
     {
-      "source_path": "confluence/people-ops/onboarding/dsid_2588273815bf4475a35ea5c78f246fa2__cross-functional-onboarding-and-career-support-compass-2026.txt",
-      "document_id": "confluence-people-ops-onboarding-dsid-2588273815bf4475a35ea5c78f246fa2-cross-functional-onboarding-and-career-support-compass-2026",
+      "source_path": "D:\\work\\enterpriseAI-knowledge\\all_documents\\confluence\\people-ops\\onboarding\\dsid_2588273815bf4475a35ea5c78f246fa2__cross-functional-onboarding-and-career-support-compass-2026.txt",
+      "source_path_key": "confluence/people-ops/onboarding/dsid_2588273815bf4475a35ea5c78f246fa2__cross-functional-onboarding-and-career-support-compass-2026.txt",
+      "content_hash": "sha256:0b2899a60b19aea881492a3755c73365a76f8ea211fc39fcba6ffa3f84c0e002",
       "query_ids": ["Q004"],
-      "expected_headings": ["Role transition and promotion process (summary):"]
+      "expected_headings": ["Role transition and promotion process (summary):"],
+      "expected_evidence": {"Q004": ["Nomination", "Calibration", "Business & Comp review", "Decision & timeline"]}
     },
     {
-      "source_path": "confluence/people-ops/onboarding/dsid_4b1d1d26a4d64f3c9f0702e7b1d2d3ef__scaled-onboarding-first-90-to-1000-playbook-2028.txt",
-      "document_id": "confluence-people-ops-onboarding-dsid-4b1d1d26a4d64f3c9f0702e7b1d2d3ef-scaled-onboarding-first-90-to-1000-playbook-2028",
+      "source_path": "D:\\work\\enterpriseAI-knowledge\\all_documents\\confluence\\people-ops\\onboarding\\dsid_4b1d1d26a4d64f3c9f0702e7b1d2d3ef__scaled-onboarding-first-90-to-1000-playbook-2028.txt",
+      "source_path_key": "confluence/people-ops/onboarding/dsid_4b1d1d26a4d64f3c9f0702e7b1d2d3ef__scaled-onboarding-first-90-to-1000-playbook-2028.txt",
+      "content_hash": "sha256:84f74c3a8b5aff4c9bf8e3dd7afeb7303fba5b97f97668f183823a8acc545f77",
       "query_ids": ["Q008", "Q013"],
-      "expected_headings": ["Benefits & Perks Quick Orientation (2028)", "Internal Tools Access Matrix (essential items)"]
+      "expected_headings": ["Benefits & Perks Quick Orientation (2028)", "Internal Tools Access Matrix (essential items)"],
+      "expected_evidence": {
+        "Q008": ["learning & development ($1,500/yr)", "401(k) matching up to 5%", "mental health platform access from day 1"],
+        "Q013": ["Okta", "GitHub", "Internal CI / Build", "Workday"]
+      }
     },
     {
-      "source_path": "confluence/people-ops/onboarding/dsid_7656c7c6a6ce4c3baa88c3a7cfb5d658__navigator-program-career-ops-and-tooling-2026.txt",
-      "document_id": "confluence-people-ops-onboarding-dsid-7656c7c6a6ce4c3baa88c3a7cfb5d658-navigator-program-career-ops-and-tooling-2026",
+      "source_path": "D:\\work\\enterpriseAI-knowledge\\all_documents\\confluence\\people-ops\\onboarding\\dsid_7656c7c6a6ce4c3baa88c3a7cfb5d658__navigator-program-career-ops-and-tooling-2026.txt",
+      "source_path_key": "confluence/people-ops/onboarding/dsid_7656c7c6a6ce4c3baa88c3a7cfb5d658__navigator-program-career-ops-and-tooling-2026.txt",
+      "content_hash": "sha256:ffbecfe89f5cdbb73b0f355bc0150047ece41e874c5323a7aa504f8d9650fd62",
       "query_ids": ["Q006", "Q010"],
-      "expected_headings": ["3) Micro-rotation and Short-term Assignment Process", "4) Mentorship, Sponsorship & Buddy System"]
+      "expected_headings": ["3) Micro-rotation and Short-term Assignment Process", "4) Mentorship, Sponsorship & Buddy System"],
+      "expected_evidence": {
+        "Q006": ["1:6 ratio", "6 sessions over 3 months", "Buddy", "Sponsor"],
+        "Q010": ["4–12 weeks", "Rotation Request form", "temporary entitlement plan", "Post-rotation debrief"]
+      }
     },
     {
-      "source_path": "confluence/people-ops/onboarding/dsid_951c6983787c4be28703bbb5b5e5edd9__talent-deep-dive-lifecycle-and-benchmarks-2025.txt",
-      "document_id": "confluence-people-ops-onboarding-dsid-951c6983787c4be28703bbb5b5e5edd9-talent-deep-dive-lifecycle-and-benchmarks-2025",
+      "source_path": "D:\\work\\enterpriseAI-knowledge\\all_documents\\confluence\\people-ops\\onboarding\\dsid_951c6983787c4be28703bbb5b5e5edd9__talent-deep-dive-lifecycle-and-benchmarks-2025.txt",
+      "source_path_key": "confluence/people-ops/onboarding/dsid_951c6983787c4be28703bbb5b5e5edd9__talent-deep-dive-lifecycle-and-benchmarks-2025.txt",
+      "content_hash": "sha256:a892810081745232269578a67681381606d4499498b43177b8f9adee949ebc31",
       "query_ids": ["Q007", "Q011"],
-      "expected_headings": ["Hiring and interview SLAs (operational targets)", "Metrics and quality gates (people-ops KPIs)"]
+      "expected_headings": ["Hiring and interview SLAs (operational targets)", "Metrics and quality gates (people-ops KPIs)"],
+      "expected_evidence": {
+        "Q007": ["Target time-to-offer from req open: 28 days"],
+        "Q011": ["Time-to-provision: median target < 48 hours", "Time-to-first-PR: median target 7 days", "90-day retention: target >= 92%"]
+      }
     },
     {
-      "source_path": "confluence/people-ops/onboarding/dsid_95aaab5e5a6640ffaceadee4bcdb5f76__runbook-retention-and-responder-onboarding-handbook-2026.txt",
-      "document_id": "confluence-people-ops-onboarding-dsid-95aaab5e5a6640ffaceadee4bcdb5f76-runbook-retention-and-responder-onboarding-handbook-2026",
+      "source_path": "D:\\work\\enterpriseAI-knowledge\\all_documents\\confluence\\people-ops\\onboarding\\dsid_95aaab5e5a6640ffaceadee4bcdb5f76__runbook-retention-and-responder-onboarding-handbook-2026.txt",
+      "source_path_key": "confluence/people-ops/onboarding/dsid_95aaab5e5a6640ffaceadee4bcdb5f76__runbook-retention-and-responder-onboarding-handbook-2026.txt",
+      "content_hash": "sha256:4bc2366d3c0dc0ced1fa8eff82fea363aef477df6620c52b997f5f6347d28134",
       "query_ids": ["Q002", "Q009", "Q012"],
-      "expected_headings": ["Game Day Integration and Scoring Rubric:", "Responder Onboarding Checklist (for new on-call engineer):", "Runbook Review Cadence and Lifecycle:"]
+      "expected_headings": ["Game Day Integration and Scoring Rubric:", "Responder Onboarding Checklist (for new on-call engineer):", "Runbook Review Cadence and Lifecycle:"],
+      "expected_evidence": {
+        "Q002": ["pass threshold 80+", "Readability & Navigation", "Execution Clarity", "Instrumentation & Verification", "Evidence Collection", "Time to Stabilize"],
+        "Q009": ["Week 1 - Shadowing", "Week 2 - Supervised Execution", "Week 4 - Solo-responding", "complete a scored game day"],
+        "Q012": ["review every 3 months", "review every 6 months", "18 months", "deprecation review"]
+      }
     },
     {
-      "source_path": "confluence/people-ops/onboarding/dsid_b6c9e2f26e644b15b5be1eed43ed7149__tiered-priority-commitments-and-telemetry-stability-standard-2026.txt",
-      "document_id": "confluence-people-ops-onboarding-dsid-b6c9e2f26e644b15b5be1eed43ed7149-tiered-priority-commitments-and-telemetry-stability-standard-2026",
+      "source_path": "D:\\work\\enterpriseAI-knowledge\\all_documents\\confluence\\people-ops\\onboarding\\dsid_b6c9e2f26e644b15b5be1eed43ed7149__tiered-priority-commitments-and-telemetry-stability-standard-2026.txt",
+      "source_path_key": "confluence/people-ops/onboarding/dsid_b6c9e2f26e644b15b5be1eed43ed7149__tiered-priority-commitments-and-telemetry-stability-standard-2026.txt",
+      "content_hash": "sha256:d3a36640a8a2e9c838da5d986ea56a60cc0f8c96cf671a5422b1cae2dfcb8adc",
       "query_ids": ["Q003", "Q016"],
-      "expected_headings": ["Operational behaviors (detailed):", "Standard requirements (high-level):"]
+      "expected_headings": ["Operational behaviors (detailed):", "Standard requirements (high-level):"],
+      "expected_evidence": {
+        "Q003": ["rw.priority", "rw.client_tier", "rw.request_nonce", "rw.model_variant"],
+        "Q016": ["maximum of 5 priority buckets", "additional buckets must be approved by Platform Observability"]
+      }
     },
     {
-      "source_path": "confluence/people-ops/onboarding/dsid_fe4f3a98cd9642afa7f9a150de313c5c__authn-audit-evidence-correlation-playbook-2028.txt",
-      "document_id": "confluence-people-ops-onboarding-dsid-fe4f3a98cd9642afa7f9a150de313c5c-authn-audit-evidence-correlation-playbook-2028",
+      "source_path": "D:\\work\\enterpriseAI-knowledge\\all_documents\\confluence\\people-ops\\onboarding\\dsid_fe4f3a98cd9642afa7f9a150de313c5c__authn-audit-evidence-correlation-playbook-2028.txt",
+      "source_path_key": "confluence/people-ops/onboarding/dsid_fe4f3a98cd9642afa7f9a150de313c5c__authn-audit-evidence-correlation-playbook-2028.txt",
+      "content_hash": "sha256:527a26e62e0678c4dce05aeeb86a4401280b0eb6af0f24d25db33d11d6a2c22a",
       "query_ids": ["Q005", "Q017", "Q018", "Q019"],
-      "expected_headings": ["Evidence bundle manifest (fields)", "Metrics and KPIs", "Risk exceptions and approval workflow", "Technical controls and requirements"]
+      "expected_headings": ["Evidence bundle manifest (fields)", "Metrics and KPIs", "Risk exceptions and approval workflow", "Technical controls and requirements"],
+      "expected_evidence": {
+        "Q005": ["evidence_id", "time_window", "tenant_ids", "signing_key_id", "signature", "retention_policy_tag"],
+        "Q017": ["Mean time to evidence (MTTE): target <= 4 hours", "Evidence completeness score", ">= 98%"],
+        "Q018": ["Requestor -> Security reviewer -> Compliance approver -> Risk committee"],
+        "Q019": ["X-RW-REQ-ID", "identity id", "structured JSON logs"]
+      }
     }
   ]
 }

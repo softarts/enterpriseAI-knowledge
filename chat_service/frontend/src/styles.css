@@ -1548,3 +1548,66 @@ body {
   background: var(--bg-elev);
   border-color: var(--text-dim);
 }
+
+/* ---------- Ask (RAG) message — source citations ---------- */
+.ask-message__sources {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: rgba(108, 140, 255, 0.06);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.ask-message__sources-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.ask-message__sources-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+}
+
+.ask-message__source-item code {
+  font-size: 11px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--accent);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.ask-message__reflection-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  align-self: center;
+}
+
+.ask-message__reflection-badge--pass {
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.25);
+}
+
+.ask-message__reflection-badge--fail {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+}
+

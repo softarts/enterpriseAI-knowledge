@@ -6,7 +6,7 @@ fixed 256-way shard derived from the document UUID so no single directory grows
 unbounded, and taxonomy never influences the path (re-classifying never moves a
 file):
 
-    storage/documents/{shard}/{uuid}_{safe_original_filename}
+    storage/documents/{shard}/{document_id}/{safe_original_filename}
 
 where shard = int(md5(uuid)) % 256, zero-padded to 3 digits.
 
@@ -54,9 +54,9 @@ def shard_for(uuid: str) -> str:
     return f"{int(digest, 16) % 256:03d}"
 
 
-def _relative_storage_path(uuid: str, safe_filename: str) -> Path:
-    """documents/{shard}/{uuid}_{safe_filename} (relative to a root)."""
-    return Path("documents") / shard_for(uuid) / f"{uuid}_{safe_filename}"
+def _relative_storage_path(document_id: str, safe_filename: str) -> Path:
+    """documents/{shard}/{document_id}/{safe_filename} (relative to a root)."""
+    return Path("documents") / shard_for(document_id) / document_id / safe_filename
 
 
 def _assert_within(root: Path, target: Path) -> Path:

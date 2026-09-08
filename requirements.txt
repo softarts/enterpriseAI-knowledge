@@ -24,3 +24,7 @@ huggingface_hub>=0.24.0
 
 # chat_service - Document Import (file uploads via multipart form data)
 python-multipart>=0.0.9
+
+# qa_service - LangChain RAG pipeline (single retrieval + single generation)
+langchain-openai>=0.1.0
+langchain-core>=0.2.0
