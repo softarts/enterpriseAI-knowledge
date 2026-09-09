@@ -284,14 +284,19 @@ Revenue recognition for subscription contracts follows ASC 606...
 ### 完整 SYSTEM_PROMPT 结构
 
 ```
-# prompt_builder.py L19-30
+# prompt_builder.py L19-35
 
 你是一个企业知识库问答助手。请严格遵守以下规则：
 
-1. 【唯一信息来源】只能依据下方 <context> 标签内提供的内容回答问题...
-2. 【必须标注来源】回答中引用了某段内容时，必须在该句末尾以 [来源: chunk_id] ...
-3. 【找不到时明确说】如果 context 中没有足够信息回答...
-4. 【简洁准确】回答应条理清晰...
+1. 【唯一信息来源】只能依据下方 <context> 标签内提供的内容回答问题，禁止使用你自身的知识补充任何事实。
+2. 【引用格式优化】请在回答的最后统一列出所有引用来源，使用以下格式：
+   **来源：**
+   - [文档名称]：chunk_id
+   - [文档名称]：chunk_id
+   不要在每个句子后面单独标注 [来源: chunk_id]，也不要使用冗长的 chunk ID。
+3. 【找不到时明确说】如果 context 中没有足够信息回答问题，直接说"根据现有知识库内容，未能找到与该问题相关的信息。"，不要猜测或补充。
+4. 【简洁准确】回答应条理清晰，使用自然流畅的段落而非过度结构化的列表，避免重复 context 原文。
+5. 【完整性保证】如果你决定列举多个项目（如场景、步骤、类别等），必须完整覆盖context中提到的所有相关项目，不能中途截断。如果项目较多，建议用概括性段落描述而非逐条列举。
 
 <context>
 [来源: proc_001/proc_001_c4 | Approval Requirements]
@@ -303,6 +308,33 @@ For SaaS agreements over $250,000...
 Multi-year commitments require CFO...
 </context>
 ```
+
+### 回答格式优化示例
+
+**优化前（过度结构化，引用分散）：**
+```
+Based on the provided knowledge base, the organization (Redwood Inference) follows ASC 606-aligned principles for revenue recognition and transaction price allocation. The process involves five key steps:
+
+1. Identify the contract: A signed agreement that creates enforceable rights with a customer is required [来源: b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0-chunk-001].
+2. Identify performance obligations: These are discrete deliverables such as API access, compute hours, or embeddings delivery [来源: b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0-chunk-001].
+3. Determine transaction price: This includes discounts, usage estimates, and variable consideration (subject to constraints) [来源: b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0-chunk-001].
+```
+
+**优化后（简洁流畅，引用统一）：**
+```
+Redwood Inference recognizes customer revenue using ASC 606-aligned principles. It identifies distinct performance obligations, determines the transaction price, allocates it across deliverables based on standalone selling prices or their best estimates, and recognizes revenue when or as each obligation is satisfied.
+
+**来源：**
+- [Procurement Contracts and RevRec Playbook]：revrec_001_c1
+- [Procurement Contracts and RevRec Playbook]：revrec_001_c2
+```
+
+**优化要点：**
+1. **避免过度结构化** - 使用自然流畅的段落代替强制编号列表
+2. **统一引用位置** - 将所有来源标注移至回答末尾，避免打断阅读流畅性
+3. **简化引用格式** - 使用文档名称+简短chunk_id，避免冗长的哈希值
+4. **匹配查询复杂度** - 对于中等难度的语义查询，简洁段落比详细分解更合适
+5. **完整性保证** - 如果列举多个项目，必须完整覆盖context中的所有相关内容，避免中途截断；项目较多时用概括性段落描述
 
 ---
 

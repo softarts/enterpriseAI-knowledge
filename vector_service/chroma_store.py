@@ -208,11 +208,20 @@ class ChromaStore:
     def stats(self) -> Dict[str, Any]:
         """Return basic information about the collection."""
         collection = self._get_collection()
+        dimension = self.dimension
+        if dimension is None and collection.count() > 0:
+            try:
+                sample = collection.peek(limit=1)
+                embeddings = sample.get("embeddings") or []
+                if embeddings and embeddings[0] is not None:
+                    dimension = len(embeddings[0])
+            except Exception:  # stats must remain available across Chroma versions
+                dimension = None
         return {
             "collection_name": self.collection_name,
             "count": collection.count(),
             "persist_dir": str(self.db_dir),
             "distance_space": DISTANCE_SPACE,
-            "embedding_dimension": self.dimension,
+            "embedding_dimension": dimension,
             "model": self.model,
         }

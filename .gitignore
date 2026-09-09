@@ -11,6 +11,7 @@ vector_db/
 chat_service/frontend/node_modules/
 chat_service/frontend/dist/
 env.bat
+env.sh
 .DS_Store
 *.npy
 kb_classifier_bootstrap/work/**
@@ -28,3 +29,5 @@ _tmp*
 .idea/
 # chat_service document import data (uploads + sqlite DB)
 chat_service/import_data/
+import_data/**
+*.db

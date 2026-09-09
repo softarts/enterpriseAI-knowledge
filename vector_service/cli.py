@@ -11,7 +11,7 @@ Two subcommands:
       python -m vector_service.cli stats
 
 The search flow: the query text is embedded with the SAME local model used at
-import time (LocalEmbedder), then the query vector is sent to Chroma which
+import time (via the shared embedder factory), then the query vector is sent to Chroma which
 returns the Top-K nearest chunks with their distance, text, and metadata.
 """
 
@@ -20,25 +20,26 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Ensure project root is importable when run as a script.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from embedding_service.embedder import LocalEmbedder
+from embedding_service.embedder import get_embedder
 from vector_service.chroma_store import ChromaStore
 from vector_service.config import DEFAULT_TOP_K, DEFAULT_VECTOR_DB_DIR
 
 
-def _resolve_db_dir(db_dir_arg: str | None) -> Path:
+def _resolve_db_dir(db_dir_arg: Optional[str]) -> Path:
     if db_dir_arg:
         return Path(db_dir_arg).resolve()
     return (PROJECT_ROOT / DEFAULT_VECTOR_DB_DIR).resolve()
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    store = ChromaStore(db_dir=_resolve_db_dir(args.db_dir))
+    store = ChromaStore(db_dir=_resolve_db_dir(args.db_dir), model=args.model)
 
     info = store.stats()
     if info["count"] == 0:
@@ -49,7 +50,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         )
         return 1
 
-    embedder = LocalEmbedder()
+    embedder = get_embedder(args.model)
     query_vector = embedder.embed_query(args.query)
 
     results = store.query(query_vector, top_k=args.top_k)
@@ -82,7 +83,7 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
-    store = ChromaStore(db_dir=_resolve_db_dir(args.db_dir))
+    store = ChromaStore(db_dir=_resolve_db_dir(args.db_dir), model=args.model)
     info = store.stats()
 
     print()
@@ -110,6 +111,11 @@ def main() -> None:
         dest="db_dir",
         default=None,
         help=f"Chroma persistent dir (default: {DEFAULT_VECTOR_DB_DIR}/).",
+    )
+    parser.add_argument(
+        "--model",
+        default="bge_m3",
+        help="Embedding model/collection suffix (default: bge_m3).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

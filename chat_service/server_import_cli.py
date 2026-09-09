@@ -7,12 +7,12 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Iterable, List, Optional, Tuple
 
 from chat_service.import_config import settings
 
 
-def _load_files(manifest_path: Path, source_root: Path | None) -> list[tuple[str, Path]]:
+def _load_files(manifest_path: Path, source_root: Optional[Path]) -> List[Tuple[str, Path]]:
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     entries = manifest.get("files")
     if not isinstance(entries, list) or not entries:
@@ -49,7 +49,7 @@ def _load_files(manifest_path: Path, source_root: Path | None) -> list[tuple[str
     return files
 
 
-def main(argv: Iterable[str] | None = None) -> int:
+def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Create a server-local batch import task")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--source-root", type=Path)

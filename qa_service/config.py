@@ -17,6 +17,7 @@ provider（HF Router → LM Studio → 其他 OpenAI 兼容端点）的唯一入
 """
 
 import os
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # 检索配置
@@ -53,6 +54,6 @@ LLM_MAX_TOKENS: int = int(os.environ.get("LLM_MAX_TOKENS", "1024"))
 # empty final content.  None means: use the safe default (disabled) for Qwen
 # models, while leaving other OpenAI-compatible models unchanged.
 _thinking_env = os.environ.get("LLM_ENABLE_THINKING")
-LLM_ENABLE_THINKING: bool | None = (
+LLM_ENABLE_THINKING: Optional[bool] = (
     None if _thinking_env is None else _thinking_env.strip().lower() in {"1", "true", "yes", "on"}
 )
