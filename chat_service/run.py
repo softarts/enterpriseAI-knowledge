@@ -5,7 +5,7 @@ Usage:
     python -m chat_service.run
 
 Environment:
-    HF_TOKEN    - required for real LLM calls (see chat_service/config.py)
+    HF_TOKEN    - required for legacy direct-chat calls (see chat_service/service/chat/config.py)
     CHAT_HOST   - default 0.0.0.0
     CHAT_PORT   - default 8100
 """
@@ -13,8 +13,8 @@ Environment:
 import logging
 
 import uvicorn
-
-from chat_service.config import settings
+import os
+from chat_service.services.chat.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +32,10 @@ def main() -> None:
     logger.info("HF_TOKEN configured: %s", bool(settings.hf_token()))
     logger.info("CORS origins: %s", ", ".join(settings.cors_origins))
     logger.info("=" * 60)
+
+
+    llmapi = os.environ.get("LLM_BASE_URL", "dummy API")
+    logger.info("LLM_BASE_URLconfigured: %s", llmapi)
 
     uvicorn.run(
         "chat_service.main:app",

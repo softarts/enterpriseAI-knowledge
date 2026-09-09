@@ -17,6 +17,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [trace, setTrace] = useState(null);
+  const [askTrace, setAskTrace] = useState(null);
 
   // Ask (RAG) — independent state so switching views preserves history
   const [askMessages, setAskMessages] = useState([]);
@@ -63,6 +64,7 @@ export default function App() {
 
     try {
       const data = await askWithRAG(question);
+      setAskTrace(data.trace || null);
 
       if (data.error) {
         setAskMessages((prev) => [
@@ -96,10 +98,10 @@ export default function App() {
       onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
       traceCollapsed={traceCollapsed}
       onToggleTrace={() => setTraceCollapsed((v) => !v)}
-      trace={trace}
+      trace={activeView === "ask" ? askTrace : trace}
       activeView={activeView}
       onViewChange={setActiveView}
-      showTrace={activeView === "chat"}
+      showTrace={activeView === "chat" || activeView === "ask"}
     >
       {activeView === "chat" ? (
         <ChatWindow messages={messages} loading={loading} onSend={handleSend} />

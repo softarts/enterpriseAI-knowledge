@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from chat_service.main import app
-from chat_service.config import settings
+from chat_service.import_config import settings
 
 client = TestClient(app)
 

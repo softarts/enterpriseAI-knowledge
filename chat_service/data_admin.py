@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Iterable
 
-from chat_service.config import settings
+from chat_service.import_config import settings
 from vector_service.config import DEFAULT_VECTOR_DB_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

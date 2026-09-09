@@ -27,7 +27,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from chat_service.config import settings
+from chat_service.import_config import settings
 from chat_service.import_db import (
     CLS_CLASSIFIED,
     CLS_UNKNOWN,

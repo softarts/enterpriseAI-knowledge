@@ -8,7 +8,7 @@ qa_service 内部数据类。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -46,3 +46,4 @@ class AnswerResult:
     answer: str
     sources: List[str] = field(default_factory=list)  # chunk_id 列表
     passed_reflection: Optional[bool] = None
+    trace: Dict[str, Any] = field(default_factory=dict)

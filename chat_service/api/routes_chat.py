@@ -8,9 +8,9 @@ Endpoints:
 
 from fastapi import APIRouter
 
-from chat_service.config import settings
-from chat_service.models import ChatRequest, ChatResponse
-from chat_service.services.chat_service import ChatService
+from chat_service.services.chat.config import settings
+from chat_service.services.chat.models import ChatRequest, ChatResponse
+from chat_service.services.chat.chat_service import ChatService
 
 router = APIRouter()
 

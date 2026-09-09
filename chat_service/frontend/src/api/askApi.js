@@ -6,7 +6,7 @@ const ASK_ENDPOINT = "/api/ask";
 /**
  * Send a question to the RAG Ask pipeline.
  * @param {string} question
- * @returns {Promise<{answer: string, sources: string[], passed_reflection: boolean|null, error: string|null}>}
+ * @returns {Promise<{answer: string, sources: string[], passed_reflection: boolean|null, trace: object, error: string|null}>}
  */
 export async function askWithRAG(question) {
   const res = await fetch(ASK_ENDPOINT, {

@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from chat_service.config import settings
+from chat_service.import_config import settings
 from chat_service.import_db import ImportDB
 from chat_service.import_storage import sanitize_filename
 from document_import import parse_okf_file, set_okf_document_id

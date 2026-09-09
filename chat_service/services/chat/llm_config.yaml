@@ -5,7 +5,7 @@
 # variable at runtime, so the real secret is never committed to the repo.
 #
 # Any ${VAR} placeholder in this file is substituted with the value of that
-# environment variable when the config is loaded (see chat_service/config.py).
+# environment variable when the config is loaded (see service/chat/config.py).
 
 provider: huggingface
 

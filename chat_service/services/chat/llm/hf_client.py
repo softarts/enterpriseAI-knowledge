@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from huggingface_hub import InferenceClient
 
-from chat_service.config import settings
+from chat_service.services.chat.config import settings
 
 
 class HFTokenMissingError(RuntimeError):

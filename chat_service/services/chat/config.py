@@ -2,7 +2,7 @@
 Configuration for chat_service.
 
 Non-secret LLM settings (provider, model, max_tokens) and the *reference* to the
-token live in a config file: chat_service/llm_config.yaml. The api_key entry in
+token live in a config file: chat_service/services/chat/llm_config.yaml. The api_key entry in
 that file is an environment-variable REFERENCE (e.g. ${HF_TOKEN}), never a
 literal token, so no secret is ever committed to the repo.
 
@@ -18,7 +18,7 @@ Environment Variables:
     HF_TOKEN            - Hugging Face access token (required to call the LLM).
     CHAT_MODEL          - Override the model id from the config file.
     CHAT_MAX_TOKENS     - Override max response tokens from the config file.
-    CHAT_LLM_CONFIG     - Path to the LLM config file (default: llm_config.yaml).
+    CHAT_LLM_CONFIG     - Path to the LLM config file (default: services/chat/llm_config.yaml).
     CHAT_HOST           - Bind address for the API (default: 0.0.0.0).
     CHAT_PORT           - Port for the API (default: 8100).
     CHAT_CORS_ORIGINS   - Comma-separated allowed origins for CORS
@@ -105,7 +105,7 @@ class Settings:
 
         # --- Document Import (MVP: single-file, synchronous) ---
         _import_root = Path(os.environ.get(
-            "CHAT_IMPORT_ROOT", str(Path(__file__).resolve().parent.parent / "import_data")
+            "CHAT_IMPORT_ROOT", str(Path(__file__).resolve().parents[2] / "import_data")
         ))
         self.import_db_path: Path = Path(
             os.environ.get("CHAT_IMPORT_DB", str(_import_root / "documents.db"))

@@ -177,7 +177,7 @@ API、前端任务页面、目录上传组件和样式；包含注释和 docstri
 `trace.py:TraceBuilder` 记录执行步骤；前端 `frontend/src/App.jsx` 在浏览器内存中
 维护消息历史，`ChatWindow.jsx` 渲染消息，`TracePanel.jsx` 渲染 trace。
 
-LLM 配置在 `chat_service/llm_config.yaml`，环境变量可以覆盖模型和 token 上限；
+旧 Chat API 的 LLM 配置在 `chat_service/service/chat/llm_config.yaml`，环境变量可以覆盖模型和 token 上限；
 真实 token 只从环境变量读取。启动方式是 `python -m chat_service.run`，前端位于
 `chat_service/frontend/`。
 
@@ -209,7 +209,7 @@ API 入口在 `api/routes_import.py`：上传返回 `pending`，查询使用
 
 ### 存储和配置
 
-默认配置位于 `chat_service/config.py:Settings`：
+旧 Chat API 默认配置位于 `chat_service/service/chat/config.py:Settings`；文档导入和维护工具使用独立的 `chat_service/import_config.py`：
 
 | 配置 | 默认值 | 作用 |
 |---|---|---|
@@ -275,7 +275,7 @@ Browser App.jsx
 | `GET` | `/api/documents` | 分页列出已导入文档 |
 | `GET` | `/api/documents/{id}/preview` | 预览 OKF 的正文 metadata |
 
-LLM 的非机密配置在 `chat_service/llm_config.yaml`，例如 provider、model、
+LLM 的非机密配置在 `chat_service/service/chat/llm_config.yaml`，例如 provider、model、
 `max_tokens` 和 `${HF_TOKEN}` 引用。真实 token 只从环境变量读取。`max_tokens` 只
 限制 completion，不限制 prompt；如果 trace 的 `finish_reason` 为 `length`，表示
 输出触达上限，可能被截断。配置优先级为环境变量 > YAML > 内置默认值。

@@ -19,8 +19,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from chat_service.config import settings
-from chat_service.llm.hf_client import HFTokenMissingError, HuggingFaceLLM
+from chat_service.services.chat.config import settings
+from chat_service.services.chat.llm.hf_client import HFTokenMissingError, HuggingFaceLLM
 from chat_service.trace import TraceBuilder
 
 

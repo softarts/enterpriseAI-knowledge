@@ -22,7 +22,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from chat_service.import_db import CLS_UNKNOWN, STATE_IMPORTED
-from chat_service.models import (
+from chat_service.services.import_models import (
     ClassificationView,
     DocumentListResponse,
     DocumentPreviewResponse,

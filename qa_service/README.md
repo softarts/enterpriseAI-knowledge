@@ -360,6 +360,7 @@ class ReflectionResult:
 | `LLM_MODEL` | `""` (必须设置) | 模型 id |
 | `LLM_API_KEY` | `""` (必须设置) | API 密钥 |
 | `LLM_MAX_TOKENS` | `1024` | LLM 最大输出 token 数 |
+| `LLM_ENABLE_THINKING` | Qwen 默认 `false` | Qwen3 是否启用 thinking；启用后可能耗尽输出预算而没有回答正文 |
 | `QA_TOP_K` | `5` | 检索 Top-K 数量 |
 | `QA_CONFIDENCE_THRESHOLD` | `0.5` | ⚠ cosine distance 阈值，**未经校准** |
 | `QA_EMBEDDING_MODEL` | `bge_m3` | embedding 模型名，须与 ChromaDB collection 对应 |

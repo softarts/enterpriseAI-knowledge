@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from chat_service.config import settings
+from chat_service.import_config import settings
 
 
 def _load_files(manifest_path: Path, source_root: Path | None) -> list[tuple[str, Path]]:

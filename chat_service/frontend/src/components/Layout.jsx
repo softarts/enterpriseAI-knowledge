@@ -3,7 +3,7 @@ import TracePanel from "./TracePanel.jsx";
 
 // Three-pane shell. The center column is flexible and auto-resizes when either
 // side pane collapses/expands (grid template columns are driven by CSS classes
-// on the root element). TracePanel is only shown on the Chat view.
+// on the root element). TracePanel is shown on the Chat and Ask views.
 
 export default function Layout({
   sidebarCollapsed,

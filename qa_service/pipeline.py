@@ -20,7 +20,9 @@ Reflection 接口预留说明：
 from __future__ import annotations
 
 import logging
+import time
 
+from chat_service.trace import TraceBuilder
 from qa_service import config, llm_client, prompt_builder, reflection, retrieval
 from qa_service.models import AnswerResult
 
@@ -43,32 +45,106 @@ def answer_question(question: str) -> AnswerResult:
             passed_reflection — Reflection 校验结果（未找到时为 None）
     """
     question = (question or "").strip()
+    trace = TraceBuilder()
+    trace.add_step(
+        "request",
+        {"question": question, "question_chars": len(question), "top_k": config.TOP_K},
+        status="ok" if question else "error",
+    )
     if not question:
         logger.warning("answer_question() called with empty question")
-        return AnswerResult(answer=_NOT_FOUND_ANSWER, sources=[], passed_reflection=None)
+        answer = AnswerResult(
+            answer=_NOT_FOUND_ANSWER, sources=[], passed_reflection=None
+        )
+        trace.add_step("response", {"answer_chars": len(answer.answer), "sources": []})
+        answer.trace = trace.build()
+        return answer
 
     # Step 1: 向量检索
+    retrieval_started = time.perf_counter()
     chunks = retrieval.retrieve(question, k=config.TOP_K)
+    trace.add_step(
+        "retrieval",
+        {
+            "top_k": config.TOP_K,
+            "count": len(chunks),
+            "top_distance": chunks[0].distance if chunks else None,
+            "chunks": [
+                {
+                    "rank": c.rank,
+                    "chunk_id": c.chunk_id,
+                    "document_id": c.document_id,
+                    "source_path": c.source_path,
+                    "heading": c.heading,
+                    "distance": c.distance,
+                }
+                for c in chunks
+            ],
+        },
+        duration_ms=(time.perf_counter() - retrieval_started) * 1000,
+    )
 
     # Step 2: 置信度判断
-    if not retrieval.is_confident(chunks, threshold=config.CONFIDENCE_THRESHOLD):
+    confident = retrieval.is_confident(chunks, threshold=config.CONFIDENCE_THRESHOLD)
+    trace.add_step(
+        "confidence",
+        {
+            "passed": confident,
+            "threshold": config.CONFIDENCE_THRESHOLD,
+            "top_distance": chunks[0].distance if chunks else None,
+        },
+    )
+    if not confident:
         logger.info("Confidence check failed; returning not-found answer")
-        return AnswerResult(answer=_NOT_FOUND_ANSWER, sources=[], passed_reflection=None)
+        answer = AnswerResult(answer=_NOT_FOUND_ANSWER, sources=[], passed_reflection=None)
+        trace.add_step(
+            "response", {"answer_chars": len(answer.answer), "sources": [], "llm_called": False}
+        )
+        answer.trace = trace.build()
+        return answer
 
     # Step 3: 组装 context
     context = prompt_builder.build_context(chunks)
+    trace.add_step("context", {"chars": len(context), "chunks": len(chunks)})
 
     # Step 4: 渲染 system prompt（把 context 填入 SYSTEM_PROMPT 的 {context} 占位符）
     system_prompt = prompt_builder.SYSTEM_PROMPT.format(context=context)
 
     # Step 5: 调用 LLM
+    llm_started = time.perf_counter()
     draft_answer = llm_client.generate(system_prompt, context, question)
+    trace.add_step(
+        "llm",
+        {
+            "model": config.LLM_MODEL,
+            "max_tokens": config.LLM_MAX_TOKENS,
+            "thinking_enabled": config.LLM_ENABLE_THINKING,
+            "question_chars": len(question),
+            "context_chars": len(context),
+            "answer_chars": len(draft_answer),
+        },
+        duration_ms=(time.perf_counter() - llm_started) * 1000,
+    )
 
     # Step 6: Reflection（当前阶段为占位实现）
     reflection_result = reflection.reflect(draft_answer, context, chunks)
 
-    return AnswerResult(
+    answer = AnswerResult(
         answer=reflection_result.final_answer,
         sources=[c.chunk_id for c in chunks],
         passed_reflection=reflection_result.passed,
     )
+    trace.add_step(
+        "reflection",
+        {"passed": reflection_result.passed, "notes": reflection_result.notes},
+    )
+    trace.add_step(
+        "response",
+        {
+            "answer_chars": len(answer.answer),
+            "sources": answer.sources,
+            "passed_reflection": answer.passed_reflection,
+        },
+    )
+    answer.trace = trace.build()
+    return answer

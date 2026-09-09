@@ -13,6 +13,7 @@ provider（HF Router → LM Studio → 其他 OpenAI 兼容端点）的唯一入
     LLM_MODEL                模型 id（如 openai/gpt-oss-120b）
     LLM_API_KEY              API 密钥（HF 用 HF_TOKEN 的值；本地模型填任意字符串）
     LLM_MAX_TOKENS           LLM 最大输出 token 数（默认 1024）
+    LLM_ENABLE_THINKING      Qwen3 thinking 模式；默认关闭以保证回答正文有输出
 """
 
 import os
@@ -47,3 +48,11 @@ LLM_API_KEY: str = os.environ.get("LLM_API_KEY", "")
 
 # LLM 最大输出 token 数（仅限 completion，不影响 prompt）
 LLM_MAX_TOKENS: int = int(os.environ.get("LLM_MAX_TOKENS", "1024"))
+
+# Qwen3 may spend the entire completion budget on reasoning and return an
+# empty final content.  None means: use the safe default (disabled) for Qwen
+# models, while leaving other OpenAI-compatible models unchanged.
+_thinking_env = os.environ.get("LLM_ENABLE_THINKING")
+LLM_ENABLE_THINKING: bool | None = (
+    None if _thinking_env is None else _thinking_env.strip().lower() in {"1", "true", "yes", "on"}
+)

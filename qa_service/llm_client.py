@@ -58,12 +58,22 @@ def _build_llm() -> ChatOpenAI:
             "环境变量 LLM_API_KEY 未设置。"
             "HF 场景请设置为 HF_TOKEN 的值；本地模型填任意非空字符串。"
         )
+    extra_body = None
+    is_qwen = "qwen" in config.LLM_MODEL.lower()
+    if is_qwen or config.LLM_ENABLE_THINKING is not None:
+        # Hugging Face's OpenAI-compatible router forwards this to the Qwen
+        # chat template.  Disabling thinking prevents the model from using the
+        # whole completion budget before emitting answer content.
+        enable_thinking = config.LLM_ENABLE_THINKING if config.LLM_ENABLE_THINKING is not None else False
+        extra_body = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
+        logger.info("LLM thinking mode: %s", enable_thinking)
     return ChatOpenAI(
         model=config.LLM_MODEL,
         base_url=config.LLM_BASE_URL,
         api_key=config.LLM_API_KEY,
         temperature=0,
         max_tokens=config.LLM_MAX_TOKENS,
+        extra_body=extra_body,
     )
 
 
