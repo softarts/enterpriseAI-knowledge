@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import InputBox from "./InputBox.jsx";
 
 // Ask (RAG) window — same layout as ChatWindow, with source citations displayed
@@ -11,7 +13,17 @@ function AskMessage({ role, content, sources, passedReflection }) {
   return (
     <div className={`message message--${role}`}>
       <div className="message__role">{roleLabel}</div>
-      <div className="message__content">{content}</div>
+      <div className="message__content">
+        {role === "assistant" ? (
+          <div className="markdown-content">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {content || ""}
+            </ReactMarkdown>
+          </div>
+        ) : (
+          content
+        )}
+      </div>
 
       {/* Source citations — only shown on assistant messages with at least one source */}
       {role === "assistant" && sources && sources.length > 0 && (

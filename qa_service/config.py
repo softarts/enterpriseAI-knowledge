@@ -48,7 +48,7 @@ LLM_MODEL: str = os.environ.get("LLM_MODEL", "")
 LLM_API_KEY: str = os.environ.get("LLM_API_KEY", "")
 
 # LLM 最大输出 token 数（仅限 completion，不影响 prompt）
-LLM_MAX_TOKENS: int = int(os.environ.get("LLM_MAX_TOKENS", "1024"))
+LLM_MAX_TOKENS: int = int(os.environ.get("LLM_MAX_TOKENS", "8192"))
 
 # Qwen3 may spend the entire completion budget on reasoning and return an
 # empty final content.  None means: use the safe default (disabled) for Qwen

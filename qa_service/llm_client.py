@@ -111,9 +111,10 @@ def generate(system_prompt: str, context: str, question: str) -> str:
     """
     chain = _get_chain()
     logger.info(
-        "Calling LLM: question_len=%d, context_len=%d",
+        "Calling LLM: question_len=%d, context_len=%d, max_tokens=%d",
         len(question),
         len(context),
+        config.LLM_MAX_TOKENS,
     )
     answer: str = chain.invoke(
         {
@@ -121,5 +122,5 @@ def generate(system_prompt: str, context: str, question: str) -> str:
             "question": question,
         }
     )
-    logger.info("LLM response received: answer_len=%d", len(answer))
+    logger.info("LLM response received: answer_len=%d, answer_preview=%s", len(answer), answer[:200] if answer else "empty")
     return answer
