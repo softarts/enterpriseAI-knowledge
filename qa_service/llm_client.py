@@ -13,6 +13,7 @@ LCEL chain：ChatPromptTemplate | ChatOpenAI | StrOutputParser
 from __future__ import annotations
 
 import logging
+from typing import Any, Dict, Optional
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -78,20 +79,41 @@ def _build_llm() -> ChatOpenAI:
 
 
 _llm: ChatOpenAI | None = None
+_llm: Optional[ChatOpenAI] = None
 
 
 def _get_chain():
     """返回（懒加载构建的）LCEL chain。"""
+def get_llm() -> ChatOpenAI:
+    """获取或初始化复用的 ChatOpenAI 实例。"""
     global _llm
     if _llm is None:
         _llm = _build_llm()
         logger.info(
             "LLM chain initialized: model=%s, base_url=%s, max_tokens=%d",
+            "LLM instance initialized: model=%s, base_url=%s, max_tokens=%d",
             config.LLM_MODEL,
             config.LLM_BASE_URL,
             config.LLM_MAX_TOKENS,
         )
     return _PROMPT | _llm | StrOutputParser()
+    return _llm
+
+
+def get_model_config() -> Dict[str, Any]:
+    """返回当前 LLM 配置字典（供 trace 记录）。"""
+    return {
+        "model": config.LLM_MODEL,
+        "base_url": config.LLM_BASE_URL,
+        "max_tokens": config.LLM_MAX_TOKENS,
+        "temperature": 0,
+        "thinking_enabled": config.LLM_ENABLE_THINKING,
+    }
+
+
+def _get_chain():
+    """返回（懒加载构建的）LCEL chain。"""
+    return _PROMPT | get_llm() | StrOutputParser()
 
 
 def generate(system_prompt: str, context: str, question: str) -> str:
@@ -124,3 +146,31 @@ def generate(system_prompt: str, context: str, question: str) -> str:
     )
     logger.info("LLM response received: answer_len=%d, answer_preview=%s", len(answer), answer[:200] if answer else "empty")
     return answer
+
+
+def generate_reflection(prompt: str) -> str:
+    """
+    调用 LLM 执行 Reflection 评审。
+
+    Args:
+        prompt: 组装好的完整 Reflection prompt。
+
+    Returns:
+        LLM 返回的 Reflection 文本。
+    """
+    llm = get_llm()
+    logger.info(
+        "Calling Reflection LLM: prompt_len=%d, model=%s, max_tokens=%d",
+        len(prompt),
+        config.LLM_MODEL,
+        config.LLM_MAX_TOKENS,
+    )
+    chain = llm | StrOutputParser()
+    result: str = chain.invoke(prompt)
+    logger.info(
+        "Reflection LLM response received: len=%d, preview=%s",
+        len(result),
+        result[:200] if result else "empty",
+    )
+    return result
+

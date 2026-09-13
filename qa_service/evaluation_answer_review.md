@@ -1273,6 +1273,402 @@ NOT_EVALUATED
 
 ---
 
+# 30. 新版本回答评估 (本地LLM + 回归Prompt)
+
+## 30.1 Baseline回答 (原评估版本)
+
+**配置**: HF Router + Qwen/Qwen3.8-27B:novita + 原prompt + max_tokens=1024
+
+```
+Based on the provided knowledge base, Redwood Inference follows ASC 606-aligned principles for revenue recognition and transaction price allocation. The process involves five core steps: identifying the customer contract, identifying distinct performance obligations (such as API access or compute hours), determining the transaction price (including discounts and variable consideration with constraints), allocating that price to each performance obligation based on standalone selling prices or best estimates, and finally recognizing revenue when or as those obligations are satisfied.
+For specific business scenarios, the treatment varies:
+- Hosted API: Revenue is recognized ratably over the billing month as tokens are delivered. If prepayment exists, deferred revenue is recorded at the time of invoicing.
+- Dedicated Capacity: The base reservation fee is recognized ratably over the commitment term. Any overage usage is recognized when earned and invoiced in the following month.
+- Private Deployments: These multi-element arrangements require separating components. Perpetual software licenses are recognized per license guidance, implementation services are recognized over time using an input method as they are delivered, and support fees are recognized ratably over the support term.
+- Multi-element Arrangements: The total transaction price is allocated to each distinct obligation (e.g., deployment, training, and support) based on their standalone selling prices (SSP). Revenue is then recognized as each specific obligation is satisfied.
+
+来源：
+- [Procurement, Contract Lifecycle, and Revenue Controls Playbook]：b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0-chunk-001-789638844f97
+- [Procurement, Contract Lifecycle, and Revenue Controls Playbook]：b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0-chunk-002-eef8e533f054
+```
+
+## 30.2 新Model回答 (本地LLM + 回归Prompt)
+
+**配置**: 本地LLM服务 http://localhost:1234/v1 + 回归prompt + max_tokens=8192
+
+```
+Based on the provided knowledge base, the organization follows ASC 606-aligned principles for revenue recognition and transaction price allocation.
+
+**Revenue Recognition Principles**
+The organization applies a five-step process for revenue recognition:
+1. Identify the contract with a customer (signed agreement creating enforceable rights)
+2. Identify performance obligations (discrete deliverables such as API access, compute hours, embeddings delivery)
+3. Determine transaction price (including discounts, usage estimates, and variable consideration with constraint)
+4. Allocate price to performance obligations (based on standalone selling price or best estimate)
+5. Recognize revenue when (or as) performance obligations are satisfied
+
+**Common Revenue Recognition Scenarios**
+The organization applies specific treatment based on the contract type:
+
+- **Hosted API (usage-based monthly billing):** Revenue is recognized as tokens are delivered ratably over the billing month. Deferred revenue is recorded at invoice if prepayment exists.
+
+- **Dedicated capacity (reserved monthly/annual commitment + overage):** The base reservation is recognized ratably over the reservation term. Overage is recognized when earned (usage-based) and invoiced in the following month.
+
+- **Private deployments (license + services + support):** The software license (if perpetual) is recognized per license guidance; implementation services are recognized over time as services are delivered using the input method; support is recognized ratably over the support term.
+
+- **Multi-element arrangements:** The transaction price is allocated to each distinct obligation. For example, in a deployment + training + 12 months support arrangement, the price is allocated based on standalone selling price (SSP) and revenue is recognized as each obligation is satisfied.
+
+**Billing and Invoicing Cadence**
+- Standard billing uses monthly invoices for usage and subscription (Net30 unless negotiated otherwise)
+- Annual prepaid contracts are invoiced at contract inception, with revenue recognized ratably over the contract period unless deliverables cause different timing
+
+**Deferred Revenue and Journal Entries**
+For annual prepaid subscriptions, cash is recorded as deferred revenue at inception, with monthly recognition entries moving amounts from deferred revenue to revenue. For usage invoices without prepayment, accounts receivable is debited and revenue is credited upon issuance.
+
+**来源：**
+- [Procurement, Contract Lifecycle, and Revenue Controls Playbook]：chunk-001-789638844f97
+- [Procurement, Contract Lifecycle, and Revenue Controls Playbook]：chunk-002-eef8e533f054
+```
+
+## 30.3 回答对比分析
+
+### 结构对比
+
+| 维度 | Baseline回答 | 新Model回答 | 差异 |
+|---|---|---|---|
+| 开头方式 | 直接进入主题 | 直接进入主题 | ✅ 相同 |
+| 五步法呈现 | 单一段落描述 | 编号列表 | ⚠️ 结构不同 |
+| 业务场景 | 项目符号列表 | 项目符号列表+粗体标题 | ⚠️ 更结构化 |
+| 额外内容 | 无 | Billing cadence + Journal entries | ❌ 新增内容 |
+| 整体长度 | 中等 | 较长 | ⚠️ 更冗长 |
+| Citation | 2个chunks | 2个chunks | ✅ 相同 |
+
+### 内容准确性对比
+
+| 核心要素 | Baseline | 新Model | 一致性 |
+|---|---|---|---|
+| ASC 606五步法 | ✅ 准确 | ✅ 准确 | ✅ 完全一致 |
+| Hosted API处理 | ✅ 准确 | ✅ 准确 | ✅ 完全一致 |
+| Dedicated Capacity处理 | ✅ 准确 | ✅ 准确 | ✅ 完全一致 |
+| Private Deployments处理 | ✅ 准确 | ✅ 准确 | ✅ 完全一致 |
+| Multi-element处理 | ✅ 准确 | ✅ 准确 | ✅ 完全一致 |
+| SSP分配机制 | ✅ 提及 | ✅ 提及 | ✅ 完全一致 |
+
+### 与Prompt要求对比
+
+| Prompt要求 | Baseline表现 | 新Model表现 | 评估 |
+|---|---|---|---|
+| "自然流畅的段落" | ⚠️ 使用列表 | ❌ 使用列表+标题 | 新Model更差 |
+| "避免过度结构化" | ⚠️ 仍有结构化 | ❌ 更结构化 | 新Model更差 |
+| "避免重复context原文" | ✅ 避免 | ⚠️ 添加了额外内容 | 新Model更差 |
+
+## 30.4 根本原因分析
+
+### 主要差异原因
+
+1. **LLM模型切换** (最主要原因):
+   - Baseline: Qwen/Qwen3.8-27B:novita (HF Router)
+   - 新Model: 本地LLM服务 (可能不同模型/参数)
+   - 不同模型即使相同prompt，输出风格差异很大
+
+2. **Token限制增加**:
+   - Baseline: max_tokens=1024
+   - 新Model: max_tokens=8192
+   - 更高token限制允许更长的回答，导致冗余
+
+3. **Prompt遵循度差异**:
+   - Baseline: 虽然仍使用列表，但相对简洁
+   - 新Model: 更倾向于结构化输出，违反prompt要求
+
+### 代码改动影响
+
+commit 8e10787的改动已回归，但新Model的回答仍不符合prompt要求，说明：
+- **不是代码问题，而是模型特性问题**
+- 即使使用相同的prompt，不同LLM模型的输出风格仍可能有显著差异
+
+## 30.5 评估结论
+
+**整体评估：新Model回答 ≠ Baseline回答**
+
+### 相似性：
+- ✅ 核心业务内容完全一致
+- ✅ 主要信息点相同
+- ✅ Citation相同
+
+### 差异性：
+- ❌ 结构化程度更高（违反prompt要求）
+- ❌ 包含额外的billing details
+- ❌ 整体更冗长
+- ❌ 更不符合"简洁性"要求
+
+### 影响评估：
+- **准确性**: 无影响，核心内容正确
+- **用户体验**: 新Model回答更冗长，需要更多滚动
+- **Prompt遵循度**: 新Model更差
+- **质量稳定性**: 模型切换会导致回答风格不稳定
+
+## 30.6 建议
+
+1. **模型选择**: 如果追求简洁性，建议继续使用原模型或选择更符合prompt要求的模型
+2. **Token限制**: 考虑将max_tokens调回1024以控制回答长度
+3. **模型特定优化**: 为不同模型定制不同的prompt策略
+4. **后处理**: 考虑对回答进行简洁化处理，移除超出核心需求的内容
+
+---
+
+# 31. OpenRouter模型测试评估
+
+## 31.1 OpenRouter Qwen3.8-27B回答
+
+**配置**: OpenRouter + qwen/qwen-2.5-72b-instruct + 回归prompt + max_tokens=8192
+
+```
+The organization recognizes customer revenue using ASC 606-aligned principles. It first identifies a signed customer agreement that creates enforceable rights, then identifies the performance obligations in the contract, such as API access, compute hours, embeddings delivery, or other distinct deliverables. It determines the transaction price, including discounts, usage estimates, and variable consideration where constrained, and allocates that price to each performance obligation based on standalone selling price or the best available estimate. Revenue is then recognized when, or as, each performance obligation is satisfied.
+
+For common Redwood customer arrangements, the treatment varies by delivery model. Hosted API usage-based monthly billing is recognized ratably as tokens are delivered over the billing month, with deferred revenue recorded if prepayment exists. Dedicated capacity arrangements recognize the base reservation ratably over the reservation term, while overage is recognized when earned and invoiced in the following month. Private deployments are treated by component: a perpetual software license is recognized under license guidance, implementation services are recognized over time as services are delivered using an input method, and support is recognized ratably over the support term. For multi-element arrangements, the transaction price is allocated to each distinct obligation—such as deployment, training, and support—based on standalone selling price, and revenue is recognized as each obligation is satisfied.
+
+Billing and invoicing support this recognition model. Standard usage and subscription invoices are issued monthly, typically on Net30 terms unless otherwise negotiated. Annual prepaid contracts are invoiced at contract inception, with revenue recognized ratably over the contract period unless specific deliverables require different timing.
+
+**来源：**
+- [Procurement, Contract Lifecycle, and Revenue Controls Playbook]：chunk-001
+- [Procurement, Contract Lifecycle, and Revenue Controls Playbook]：chunk-002
+```
+
+## 31.2 OpenRouter Free随机模型回答
+
+**配置**: OpenRouter + openrouter/free (随机模型) + 回归prompt + max_tokens=8192
+
+```
+Based on the provided context, here's how the organization recognizes customer revenue and allocates transaction prices across deliverables:
+
+**Revenue Recognition Framework**
+
+The organization follows ASC 606-aligned principles for revenue recognition. Key steps include:
+- Identifying the contract with a customer (signed agreement creating enforceable rights)
+- Identifying performance obligations (discrete deliverables such as API access, compute hours, or embeddings delivery)
+- Determining the transaction price (including discounts, usage estimates, and variable consideration with constraints)
+- Allocating the total transaction price to each performance obligation based on their standalone selling price or best estimate
+- Recognizing revenue when (or as) each performance obligation is satisfied
+
+**Transaction Price Allocation Across Deliverables**
+
+Different arrangement types receive specific treatment for allocating transaction prices:
+
+- **Hosted API (usage-based monthly billing)**: Revenue is recognized ratably as tokens are delivered during the billing month. If prepayment exists, deferred revenue is recorded at the invoice date.
+
+- **Dedicated capacity (reserved monthly/annual commitment + overage)**: The base reservation is recognized ratably over the reservation term. Any overage (usage-based charges) is recognized when earned and invoiced in the following month.
+
+- **Private deployments (license + services + support)**: Each component is recognized separately—perpetual software licenses are recognized per license guidance, implementation services are recognized over time as they are delivered using an input method, and support is recognized ratably over the support term.
+
+- **Multi-element arrangements**: The transaction price is allocated to each distinct obligation. For example, a combination of deployment, training, and 12 months of support would have its price allocated based on the SSP (Service Level Agreement) and recognized as each obligation is satisfied.
+
+**Additional Context**
+
+For multi-element arrangements like deployment plus training plus support, the organization allocates the transaction price to each distinct obligation and recognizes them as each one is fulfilled. This ensures that revenue is recognized in alignment with the actual delivery of distinct services rather than bundling everything together.
+
+**Sources:**
+- Procurement, Contract Lifecycle, and Revenue Controls Playbook (b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0-chunk-002-eef8e533f054)
+- Procurement, Contract Lifecycle, and Revenue Controls Playbook (b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0-chunk-001-789638844f97)
+- Procurement, Contract Lifecycle, and Revenue Controls Playbook (b7d0c39e994e21b38485cb4fac7d12107065f8068421916a650623efabaa0ed0-chunk-000-8b652425536e)
+```
+
+## 31.3 多模型对比分析
+
+### 完整对比表
+
+| 维度 | Baseline (HF Qwen3.8) | OpenRouter Qwen3.8 | OpenRouter Free | 本地LLM |
+|---|---|---|---|---|
+| **配置** | HF Router + Qwen3.8-27B | OpenRouter + Qwen | OpenRouter + Free | 本地服务 |
+| **五步法呈现** | 单一段落 | 单一段落 | 列表 | 编号列表 |
+| **业务场景** | 项目符号列表 | 段落描述 | 项目符号列表 | 项目符号列表+标题 |
+| **额外内容** | 无 | Billing invoicing | Additional context | Billing + Journal entries |
+| **整体长度** | 中等 | 中等 | 较长 | 最长 |
+| **结构化程度** | 中等 | 最低 | 较高 | 最高 |
+| **Prompt遵循度** | ⚠️ | ✅ 最佳 | ⚠️ | ❌ 最差 |
+| **Citation数量** | 2 chunks | 2 chunks (简化) | 3 chunks | 2 chunks |
+| **Citation格式** | 完整chunk_id | 简化chunk_id | 完整chunk_id + path | 完整chunk_id |
+
+### 结构化程度排序 (从低到高)
+1. **OpenRouter Qwen3.8** - 最接近自然段落 ✅
+2. **Baseline HF Qwen3.8** - 中等结构化
+3. **OpenRouter Free** - 较高结构化
+4. **本地LLM** - 最高结构化 ❌
+
+### Prompt遵循度排序 (从好到差)
+1. **OpenRouter Qwen3.8** - 最佳遵循 ✅
+2. **Baseline HF Qwen3.8** - 中等遵循
+3. **OpenRouter Free** - 中等遵循
+4. **本地LLM** - 最差遵循 ❌
+
+### 内容准确性对比
+
+| 核心要素 | Baseline | OpenRouter Qwen3.8 | OpenRouter Free | 本地LLM |
+|---|---|---|---|---|
+| ASC 606五步法 | ✅ | ✅ | ✅ | ✅ |
+| Hosted API处理 | ✅ | ✅ | ✅ | ✅ |
+| Dedicated Capacity处理 | ✅ | ✅ | ✅ | ✅ |
+| Private Deployments处理 | ✅ | ✅ | ✅ | ✅ |
+| Multi-element处理 | ✅ | ✅ | ✅ | ✅ |
+| SSP分配机制 | ✅ | ✅ | ✅ | ✅ |
+
+**结论**: 所有模型在内容准确性上完全一致。
+
+## 31.4 同模型不同Provider差异分析
+
+### Qwen3.8-27B在不同Provider上的对比
+
+| 维度 | HF Router | OpenRouter | 差异分析 |
+|---|---|---|---|
+| **五步法呈现** | 单一段落 | 单一段落 | ✅ 相同 |
+| **业务场景** | 项目符号列表 | 段落描述 | ⚠️ 结构不同 |
+| **额外内容** | 无 | Billing invoicing | ⚠️ OpenRouter更多 |
+| **整体长度** | 中等 | 中等 | ✅ 相似 |
+| **Prompt遵循度** | ⚠️ 仍用列表 | ✅ 更接近段落 | ✅ OpenRouter更好 |
+| **Citation** | 完整chunk_id | 简化chunk_id | ⚠️ 格式不同 |
+
+### Provider差异原因分析
+
+1. **模型版本/微调差异**:
+   - 即使都是Qwen3.8-27B，不同provider可能使用不同的微调版本
+   - OpenRouter可能使用了更新的版本或不同的微调
+
+2. **推理参数差异**:
+   - 不同provider可能使用不同的temperature、top_p等参数
+   - 即使我们设置temperature=0，provider可能有默认设置
+
+3. **Prompt处理差异**:
+   - 不同provider可能对prompt有不同的预处理
+   - 可能影响模型对指令的理解
+
+4. **系统提示差异**:
+   - 不同provider可能添加了额外的系统提示
+   - 影响输出风格
+
+## 31.5 综合评定
+
+### 效果排序 (综合考量)
+
+#### 推荐排序:
+
+1. **🥇 OpenRouter Qwen3.8** - 最佳综合表现
+   - ✅ Prompt遵循度最佳（最接近自然段落）
+   - ✅ 内容准确完整
+   - ✅ 长度适中
+   - ✅ Citation格式合理
+   - ⚠️ 略包含额外billing内容
+
+2. **🥈 Baseline HF Qwen3.8** - 良好表现
+   - ✅ 内容准确完整
+   - ✅ 长度适中
+   - ⚠️ 仍使用列表结构
+   - ✅ Citation格式完整
+
+3. **🥉 OpenRouter Free** - 可接受但不够理想
+   - ✅ 内容准确完整
+   - ✅ Citation更详细（3个chunks）
+   - ❌ 过度结构化
+   - ❌ 包含额外context
+   - ❌ 长度较长
+
+4. **🏅 本地LLM** - 最不推荐
+   - ✅ 内容准确完整
+   - ❌ 最不符合prompt要求
+   - ❌ 最冗长
+   - ❌ 结构化程度最高
+
+### 关键发现
+
+1. **模型选择 > Provider选择**:
+   - 同一模型在不同provider上确实有差异
+   - 但模型本身特性是决定性因素
+
+2. **Prompt遵循度模型差异明显**:
+   - OpenRouter Qwen3.8在prompt遵循度上表现最佳
+   - 说明模型训练/微调对指令遵循有显著影响
+
+3. **内容准确性普遍良好**:
+   - 所有测试模型在核心内容准确性上都很好
+   - 说明检索和prompt在准确性层面是成功的
+
+4. **简洁性与质量不直接相关**:
+   - OpenRouter Qwen3.8既简洁又准确
+   - 本地LLM冗长但准确
+   - 说明可以通过模型选择优化用户体验
+
+### 推荐配置
+
+**生产环境推荐**: OpenRouter + Qwen3.8系列模型
+- 最佳prompt遵循度
+- 良好的简洁性
+- 准确的内容
+- 合理的长度
+
+**备选方案**: HF Router + Qwen3.8-27B
+- 原评估验证过的配置
+- 表现稳定可靠
+- Prompt遵循度可接受
+
+**不推荐**: 本地LLM服务（当前配置）
+- Prompt遵循度差
+- 过于冗长
+- 用户体验不佳
+
+## 31.6 模型差异的技术启示
+
+### 模型特性影响
+
+1. **指令遵循能力**:
+   - 不同模型对"使用自然段落"指令的遵循程度差异很大
+   - 这是模型训练的重要差异点
+
+2. **输出风格偏好**:
+   - 有些模型天生偏好结构化输出
+   - 有些模型更偏好段落式输出
+   - 这种偏好很难通过prompt完全改变
+
+3. **冗余度控制**:
+   - 有些模型倾向于添加额外解释
+   - 有些模型更简洁直接
+   - 与模型的训练目标和RLHF策略相关
+
+### Provider影响
+
+1. **模型版本差异**:
+   - 同一名称模型在不同provider可能是不同版本
+   - 微调数据、训练时间等都有差异
+
+2. **推理参数**:
+   - 即使设置相同参数，provider可能有不同默认值
+   - 影响输出的随机性和多样性
+
+3. **系统提示**:
+   - 不同provider可能添加不同的系统提示
+   - 影响模型的行为和输出风格
+
+### 工程建议
+
+1. **模型选择策略**:
+   - 优先选择在eval中验证过的模型
+   - 考虑模型的指令遵循能力
+   - 重视输出风格的一致性
+
+2. **Provider选择策略**:
+   - 同一模型在不同provider上可能有差异
+   - 需要评估provider的模型版本和配置
+   - 选择与需求匹配的provider
+
+3. **Prompt优化策略**:
+   - 针对特定模型特性优化prompt
+   - 考虑为不同模型使用不同prompt
+   - 模型感知的prompt策略
+
+4. **质量监控策略**:
+   - 监控不同模型的输出质量指标
+   - 建立模型性能基准测试
+   - 定期评估模型一致性
+
+---
+
 ## P1 — 建立 Claim-level Answer Evaluation
 
 实现：

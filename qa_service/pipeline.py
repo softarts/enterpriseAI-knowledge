@@ -9,6 +9,7 @@ qa_service.pipeline — 问答主入口。
     4. 把 context 渲染进 SYSTEM_PROMPT
     5. llm_client.generate(...)             LangChain LCEL chain 调用 LLM
     6. reflection.reflect(...)              Reflection（当前为占位实现）
+    6. reflection.reflect(...)              Reflection 评审
     7. 返回 AnswerResult
 
 Reflection 接口预留说明：
@@ -128,6 +129,13 @@ def answer_question(question: str) -> AnswerResult:
 
     # Step 6: Reflection（当前阶段为占位实现）
     reflection_result = reflection.reflect(draft_answer, context, chunks)
+    # Step 6: Reflection
+    reflection_result = reflection.reflect(
+        question=question,
+        context=context,
+        draft_answer=draft_answer,
+        retrieved_chunks=chunks,
+    )
 
     answer = AnswerResult(
         answer=reflection_result.final_answer,
@@ -137,6 +145,22 @@ def answer_question(question: str) -> AnswerResult:
     trace.add_step(
         "reflection",
         {"passed": reflection_result.passed, "notes": reflection_result.notes},
+        {
+            "input": {
+                "question": question,
+                "context": context,
+                "answer": draft_answer,
+            },
+            "prompt": reflection_result.prompt,
+            "model": reflection_result.model,
+            "model_config": reflection_result.model_config,
+            "output": reflection_result.raw_output,
+            "decision": reflection_result.decision,
+            "status": "ok" if reflection_result.error is None else "error",
+            "error": reflection_result.error,
+        },
+        status="ok" if reflection_result.error is None else "error",
+        duration_ms=reflection_result.duration_ms,
     )
     trace.add_step(
         "response",

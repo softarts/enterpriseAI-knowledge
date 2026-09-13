@@ -10,11 +10,14 @@ function AskMessage({ role, content, sources, passedReflection }) {
   const roleLabel =
     role === "user" ? "You" : role === "error" ? "Error" : "Assistant";
 
+  // Temporarily disable markdown rendering via config flag
+  const enableMarkdown = false; // Set to true to enable markdown rendering
+
   return (
     <div className={`message message--${role}`}>
       <div className="message__role">{roleLabel}</div>
       <div className="message__content">
-        {role === "assistant" ? (
+        {role === "assistant" && enableMarkdown ? (
           <div className="markdown-content">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {content || ""}

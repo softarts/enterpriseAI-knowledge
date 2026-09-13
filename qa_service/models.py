@@ -35,8 +35,16 @@ class ReflectionResult:
     """
 
     passed: bool
+    passed: Optional[bool]
     final_answer: str
     notes: str
+    decision: Optional[str] = None
+    raw_output: str = ""
+    error: Optional[str] = None
+    duration_ms: Optional[float] = None
+    prompt: str = ""
+    model: str = ""
+    model_config: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

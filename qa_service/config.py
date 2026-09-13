@@ -57,3 +57,8 @@ _thinking_env = os.environ.get("LLM_ENABLE_THINKING")
 LLM_ENABLE_THINKING: Optional[bool] = (
     None if _thinking_env is None else _thinking_env.strip().lower() in {"1", "true", "yes", "on"}
 )
+
+# Enable/disable markdown rendering in frontend
+ENABLE_MARKDOWN_RENDERING: bool = (
+    os.environ.get("ENABLE_MARKDOWN_RENDERING", "false").strip().lower() in {"1", "true", "yes", "on"}
+)
