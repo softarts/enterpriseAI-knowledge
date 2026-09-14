@@ -62,3 +62,58 @@ LLM_ENABLE_THINKING: Optional[bool] = (
 ENABLE_MARKDOWN_RENDERING: bool = (
     os.environ.get("ENABLE_MARKDOWN_RENDERING", "false").strip().lower() in {"1", "true", "yes", "on"}
 )
+
+# ---------------------------------------------------------------------------
+# Reflection 配置
+# ---------------------------------------------------------------------------
+
+# 是否启用 Reflection 评审流程（默认开启；可通过 REFLECTION_ENABLED=false 关闭）
+_reflection_enabled_env = os.environ.get("REFLECTION_ENABLED", "true")
+REFLECTION_ENABLED: bool = (
+    _reflection_enabled_env.strip().lower() in {"1", "true", "yes", "on"}
+)
+
+# 可选独立 Reflection 模型配置；未配置时回退到主 LLM 配置
+REFLECTION_MODEL: str = os.environ.get("REFLECTION_MODEL", "")
+REFLECTION_BASE_URL: str = os.environ.get("REFLECTION_BASE_URL", "")
+REFLECTION_API_KEY: str = os.environ.get("REFLECTION_API_KEY", "")
+
+
+def is_reflection_enabled() -> bool:
+    """判断是否启用 Reflection（优先从当前环境变量读取）。"""
+    env_val = os.environ.get("REFLECTION_ENABLED")
+    if env_val is not None:
+        return env_val.strip().lower() in {"1", "true", "yes", "on"}
+    return REFLECTION_ENABLED
+
+
+def get_reflection_model() -> str:
+    """获取生效的 Reflection 模型名。"""
+    ref_model = os.environ.get("REFLECTION_MODEL", REFLECTION_MODEL)
+    if ref_model:
+        return ref_model
+    return os.environ.get("LLM_MODEL", LLM_MODEL)
+
+
+def get_reflection_base_url() -> str:
+    """获取生效的 Reflection base_url。"""
+    ref_url = os.environ.get("REFLECTION_BASE_URL", REFLECTION_BASE_URL)
+    if ref_url:
+        return ref_url
+    return os.environ.get("LLM_BASE_URL", LLM_BASE_URL)
+
+
+def get_reflection_api_key() -> str:
+    """获取生效的 Reflection API key。"""
+    ref_key = os.environ.get("REFLECTION_API_KEY", REFLECTION_API_KEY)
+    if ref_key:
+        return ref_key
+    return os.environ.get("LLM_API_KEY", LLM_API_KEY)
+
+
+def get_reflection_model_source() -> str:
+    """返回 Reflection 模型的配置来源（供 trace 记录）。"""
+    ref_model = os.environ.get("REFLECTION_MODEL", REFLECTION_MODEL)
+    return "REFLECTION_MODEL" if bool(ref_model) else "LLM_MODEL fallback"
+
+

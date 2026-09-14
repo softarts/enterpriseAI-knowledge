@@ -8,23 +8,18 @@ qa_service.pipeline — 问答主入口。
     3. prompt_builder.build_context(chunks) 组装 context 字符串
     4. 把 context 渲染进 SYSTEM_PROMPT
     5. llm_client.generate(...)             LangChain LCEL chain 调用 LLM
-    6. reflection.reflect(...)              Reflection（当前为占位实现）
     6. reflection.reflect(...)              Reflection 评审
     7. 返回 AnswerResult
-
-Reflection 接口预留说明：
-    pipeline.py 正常调用 reflection.reflect()，使用其返回的
-    ReflectionResult.final_answer 作为最终答案。
-    下阶段只需替换 reflection.reflect() 函数体，不需要改动此文件。
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from typing import Optional
 
 from chat_service.trace import TraceBuilder
-from qa_service import config, llm_client, prompt_builder, reflection, retrieval
+from qa_service import config, llm_client, prompt_builder, reflection, retrieval, revision
 from qa_service.models import AnswerResult
 
 logger = logging.getLogger(__name__)
@@ -127,40 +122,171 @@ def answer_question(question: str) -> AnswerResult:
         duration_ms=(time.perf_counter() - llm_started) * 1000,
     )
 
-    # Step 6: Reflection（当前阶段为占位实现）
-    reflection_result = reflection.reflect(draft_answer, context, chunks)
-    # Step 6: Reflection
-    reflection_result = reflection.reflect(
-        question=question,
-        context=context,
-        draft_answer=draft_answer,
-        retrieved_chunks=chunks,
+    # Step 6: Reflection & Revision Closed Loop
+    revised_answer: Optional[str] = None
+    passed_reflection: Optional[bool] = None
+
+    if not config.is_reflection_enabled():
+        final_answer = draft_answer
+        output_source = "generation"
+        final_status = "success"
+
+        trace.add_step(
+            "reflection",
+            {
+                "enabled": False,
+                "status": "skipped",
+                "decision": None,
+                "model": None,
+                "model_source": None,
+                "prompt": None,
+                "input": None,
+                "output": None,
+                "parsed_result": None,
+                "reasons": [],
+                "unnecessary_content": [],
+                "missing_information": [],
+                "unsupported_claims": [],
+                "error": None,
+            },
+            status="skipped",
+        )
+        trace.add_step(
+            "revision",
+            {
+                "executed": False,
+                "status": "skipped",
+                "model": None,
+                "prompt": None,
+                "input": None,
+                "output": None,
+                "error": None,
+            },
+            status="skipped",
+        )
+    else:
+        reflection_result = reflection.reflect(
+            question=question,
+            context=context,
+            draft_answer=draft_answer,
+            retrieved_chunks=chunks,
+        )
+        passed_reflection = reflection_result.passed
+        parsed_dict = (
+            reflection_result.parsed_result.to_dict()
+            if reflection_result.parsed_result
+            else None
+        )
+
+        trace.add_step(
+            "reflection",
+            {
+                "enabled": True,
+                "status": reflection_result.status,
+                "model": reflection_result.model,
+                "model_source": reflection_result.model_source,
+                "prompt": reflection_result.prompt,
+                "input": {
+                    "question": question,
+                    "context": context,
+                    "answer": draft_answer,
+                },
+                "output": reflection_result.raw_output,
+                "parsed_result": parsed_dict,
+                "decision": reflection_result.decision,
+                "reasons": (
+                    reflection_result.parsed_result.reasons
+                    if reflection_result.parsed_result
+                    else []
+                ),
+                "unnecessary_content": (
+                    reflection_result.parsed_result.unnecessary_content
+                    if reflection_result.parsed_result
+                    else []
+                ),
+                "missing_information": (
+                    reflection_result.parsed_result.missing_information
+                    if reflection_result.parsed_result
+                    else []
+                ),
+                "unsupported_claims": (
+                    reflection_result.parsed_result.unsupported_claims
+                    if reflection_result.parsed_result
+                    else []
+                ),
+                "error": reflection_result.error,
+            },
+            status="ok" if reflection_result.status == "success" else "error",
+            duration_ms=reflection_result.duration_ms,
+        )
+
+        if reflection_result.status == "success" and reflection_result.decision == "REVISE":
+            revision_result = revision.revise(
+                question=question,
+                context=context,
+                draft_answer=draft_answer,
+                reflection_result=reflection_result,
+            )
+            trace.add_step(
+                "revision",
+                {
+                    "executed": True,
+                    "status": revision_result.status,
+                    "model": revision_result.model,
+                    "prompt": revision_result.prompt,
+                    "input": revision_result.input,
+                    "output": revision_result.output,
+                    "error": revision_result.error,
+                },
+                status="ok" if revision_result.status == "success" else "error",
+                duration_ms=revision_result.duration_ms,
+            )
+
+            if revision_result.status == "success" and revision_result.revised_answer:
+                revised_answer = revision_result.revised_answer
+                final_answer = revision_result.revised_answer
+                output_source = "revision"
+                final_status = "success"
+            else:
+                # Revision 失败：回退到 draft_answer
+                final_answer = draft_answer
+                output_source = "generation"
+                final_status = "success"
+        else:
+            # PASS 或 Reflection 异常：保留 draft_answer，跳过 revision
+            final_answer = draft_answer
+            output_source = "generation"
+            final_status = "success"
+            trace.add_step(
+                "revision",
+                {
+                    "executed": False,
+                    "status": "skipped",
+                    "model": None,
+                    "prompt": None,
+                    "input": None,
+                    "output": None,
+                    "error": None,
+                },
+                status="skipped",
+            )
+
+    trace.add_step(
+        "final_output",
+        {
+            "answer": final_answer,
+            "source": output_source,
+            "status": final_status,
+            "draft_answer": draft_answer,
+            "revised_answer": revised_answer,
+        },
+        status="ok",
     )
 
     answer = AnswerResult(
-        answer=reflection_result.final_answer,
+        answer=final_answer,
         sources=[c.chunk_id for c in chunks],
-        passed_reflection=reflection_result.passed,
-    )
-    trace.add_step(
-        "reflection",
-        {"passed": reflection_result.passed, "notes": reflection_result.notes},
-        {
-            "input": {
-                "question": question,
-                "context": context,
-                "answer": draft_answer,
-            },
-            "prompt": reflection_result.prompt,
-            "model": reflection_result.model,
-            "model_config": reflection_result.model_config,
-            "output": reflection_result.raw_output,
-            "decision": reflection_result.decision,
-            "status": "ok" if reflection_result.error is None else "error",
-            "error": reflection_result.error,
-        },
-        status="ok" if reflection_result.error is None else "error",
-        duration_ms=reflection_result.duration_ms,
+        passed_reflection=passed_reflection,
     )
     trace.add_step(
         "response",
@@ -172,3 +298,4 @@ def answer_question(question: str) -> AnswerResult:
     )
     answer.trace = trace.build()
     return answer
+

@@ -26,25 +26,59 @@ class RetrievedChunk:
 
 
 @dataclass
+class ParsedReflection:
+    """结构化解析后的 Reflection 输出。"""
+
+    decision: Optional[str] = None  # "PASS" | "REVISE" | None
+    reasons: List[str] = field(default_factory=list)
+    unnecessary_content: List[str] = field(default_factory=list)
+    missing_information: List[str] = field(default_factory=list)
+    unsupported_claims: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "decision": self.decision,
+            "reasons": self.reasons,
+            "unnecessary_content": self.unnecessary_content,
+            "missing_information": self.missing_information,
+            "unsupported_claims": self.unsupported_claims,
+        }
+
+
+@dataclass
 class ReflectionResult:
-    """
-    Reflection 阶段的校验结果。
+    """Reflection 阶段的执行结果。"""
 
-    当前阶段为占位实现（passed=True，final_answer == draft_answer）。
-    下阶段替换 reflection.reflect() 函数体时，此数据类不需要改动。
-    """
-
-    passed: bool
-    passed: Optional[bool]
-    final_answer: str
-    notes: str
+    enabled: bool = True
+    status: str = "success"  # "success" | "error" | "skipped"
+    passed: Optional[bool] = None
+    final_answer: str = ""
+    notes: str = ""
     decision: Optional[str] = None
     raw_output: str = ""
+    parsed_result: Optional[ParsedReflection] = None
     error: Optional[str] = None
     duration_ms: Optional[float] = None
     prompt: str = ""
     model: str = ""
+    model_source: str = ""  # "REFLECTION_MODEL" | "LLM_MODEL fallback"
     model_config: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RevisionResult:
+    """Revision 阶段的执行结果。"""
+
+    executed: bool = False
+    status: str = "skipped"  # "success" | "error" | "skipped"
+    revised_answer: str = ""
+    prompt: str = ""
+    input: Dict[str, Any] = field(default_factory=dict)
+    output: str = ""
+    error: Optional[str] = None
+    duration_ms: Optional[float] = None
+    model: str = ""
+
 
 
 @dataclass

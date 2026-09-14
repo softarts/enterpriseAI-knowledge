@@ -122,7 +122,7 @@ Missing important information:
 - <content, or "None">
 
 Unsupported claims:
-- <content, or "None">\
+- <content, or "None">
 """
 
 
@@ -138,4 +138,59 @@ def build_reflection_prompt(question: str, context: str, answer: str) -> str:
         .replace("{context}", context)
         .replace("{answer}", answer)
     )
+
+
+# ---------------------------------------------------------------------------
+# Revision prompt template and builder
+# ---------------------------------------------------------------------------
+
+REVISION_PROMPT_TEMPLATE = """\
+You are an enterprise knowledge-base assistant. Your task is to revise and improve a draft answer based on reflection feedback, while remaining strictly grounded in the retrieved context.
+
+Question:
+{question}
+
+Retrieved Context (The ONLY source of factual truth):
+<context>
+{context}
+</context>
+
+Draft Answer:
+{draft_answer}
+
+Reflection Feedback:
+{reflection_feedback}
+
+Revision Rules:
+1. [Strict Grounding]: Base your revised answer ONLY on the text inside <context>. Do not use outside knowledge. The Reflection Feedback is advisory evaluation only—it is NOT source evidence. Do not treat reflection feedback as factual evidence.
+2. [Address Feedback]:
+   - Remove any unnecessary, redundant, or out-of-scope content identified in the feedback.
+   - Add important missing information identified in the feedback IF AND ONLY IF it is supported by the retrieved context.
+   - Remove or correct any unsupported or inaccurate claims identified in the feedback.
+3. [Citation Format]: Keep citation references aligned with the retrieved context. List all cited sources at the end:
+   **来源：**
+   - [文档名称]：chunk_id
+4. [Output Style]: Provide clear, coherent, natural paragraphs. Output ONLY the revised final answer directly, without introductory remarks like "Here is the revised answer" or meta-commentary.\
+"""
+
+
+def build_revision_prompt(
+    question: str,
+    context: str,
+    draft_answer: str,
+    reflection_feedback: str,
+) -> str:
+    """
+    组装 Revision prompt。
+
+    使用 replace 而非 str.format，避免大括号引发格式化异常。
+    """
+    return (
+        REVISION_PROMPT_TEMPLATE
+        .replace("{question}", question)
+        .replace("{context}", context)
+        .replace("{draft_answer}", draft_answer)
+        .replace("{reflection_feedback}", reflection_feedback)
+    )
+
 
