@@ -112,11 +112,18 @@ def answer_question(question: str) -> AnswerResult:
     trace.add_step(
         "llm",
         {
+            # ── Request / Input ─────────────────────────────────────────
             "model": config.LLM_MODEL,
             "max_tokens": config.LLM_MAX_TOKENS,
             "thinking_enabled": config.LLM_ENABLE_THINKING,
             "question_chars": len(question),
             "context_chars": len(context),
+            # ── Raw Generation Output ────────────────────────────────────
+            # Full unmodified string returned by llm_client.generate().
+            # draft_answer may later be overwritten by Revision; this field
+            # always preserves the original LLM response for diagnostics.
+            "raw_output": draft_answer,
+            # ── Metadata ─────────────────────────────────────────────────
             "answer_chars": len(draft_answer),
         },
         duration_ms=(time.perf_counter() - llm_started) * 1000,

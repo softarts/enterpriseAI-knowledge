@@ -57,9 +57,10 @@ qa_service/               ← 与 embedding_service/、vector_service/ 同级（
 ├── config.py             ← 所有配置项，全部支持环境变量覆盖
 ├── retrieval.py          ← 向量编码 + ChromaDB 检索 + 置信度判断
 ├── prompt_builder.py     ← context 拼接 + SYSTEM_PROMPT 常量
-├── llm_client.py         ← LangChain LCEL chain 封装（ChatOpenAI）
-├── reflection.py         ← Reflection 接口 + 占位实现
-└── pipeline.py           ← 主入口 answer_question()
+├── llm_client.py         ← LangChain LCEL chain 封装（ChatOpenAI / Reflection / Revision）
+├── reflection.py         ← Reflection 评审与结构化结果解析（PASS / REVISE）
+├── revision.py           ← Revision 单轮针对性修订（基于 context 修复草稿）
+└── pipeline.py           ← 主入口 answer_question()（闭环编排与完整链路追踪）
 
 chat_service/
 ├── api/
@@ -116,16 +117,25 @@ chat_service/frontend/src/
     │             | StrOutputParser()              [llm_client.py L84]
     │             → draft_answer (str)
     │
-    ├─ Step 6: reflection.reflect(draft, context, chunks)
-    │          │                                  [reflection.py L26]
-    │          └─ 当前：占位实现，直接返回 passed=True
-    │             下阶段：逐句比对 chunk 支撑
+    ├─ Step 6: Reflection & Revision Closed Loop [pipeline.py]
+    │          │
+    │          ├─ config.is_reflection_enabled()?
+    │          │  └─ False → final_answer = draft_answer (trace 记录 skipped)
+    │          │
+    │          └─ True → reflection.reflect(question, context, draft_answer, chunks)
+    │             │      └─ 独立模型或回退主模型评审，结构化解析 PASS / REVISE
+    │             │
+    │             ├─ PASS → final_answer = draft_answer (revision skipped)
+    │             │
+    │             └─ REVISE → revision.revise(question, context, draft, reflection_res)
+    │                ├─ Revision 成功 → final_answer = revised_answer
+    │                └─ Revision 失败/异常 → 安全回退 final_answer = draft_answer
     │
     └─ 返回 AnswerResult(
            answer=final_answer,
            sources=[chunk_id, ...],
            passed_reflection=True/False/None
-       )                                          [pipeline.py L70-74]
+       )
 ```
 
 ### 单例加载策略
@@ -338,48 +348,89 @@ Redwood Inference recognizes customer revenue using ASC 606-aligned principles. 
 
 ---
 
-## Reflection 接口说明
+## Reflection & Revision 闭环工作流说明
 
-### 当前行为（占位实现）
+系统已将 Reflection 升级为**决策型闭环流程**。在初始生成草稿答案后，由 Reflection 进行独立多维评审，并在发现缺陷时触发单轮针对性 Revision。
 
-```python
-# reflection.py L26-63
-
-def reflect(
-    draft_answer: str,
-    context: str,
-    retrieved_chunks: List[RetrievedChunk],
-) -> ReflectionResult:
-    # 占位：直接通过，不做任何实际校验
-    return ReflectionResult(
-        passed=True,
-        final_answer=draft_answer,   # == draft_answer，无修改
-        notes="占位实现，未做真实校验",
-    )
+```text
+Question
+  ↓
+Retrieval
+  ↓
+Generation → Draft Answer
+  ↓
+Reflection (评审 5 个维度)
+  ↓
+Decision
+  ├── PASS   → Final Answer = Draft Answer
+  └── REVISE → Revision (依据 Context 针对性修订)
+                 ├── 成功 → Final Answer = Revised Answer
+                 └── 异常/空值 → 安全回退 Final Answer = Draft Answer
 ```
 
-### 下阶段替换方式
+### 1. 核心约束与安全回退
+1. **单一事实来源**：Revision 阶段严格以检索到的 `<context>` 为唯一事实来源，评审意见仅作为修改指导，不得作为事实证据直接采信。
+2. **无递归循环**：每次请求最多触发 1 轮 Revision，严格杜绝死循环和 token 预算失控。
+3. **优雅降级（Graceful Fallback）**：Reflection 异常、返回空或网络失败时，Trace 记录错误，QA 流程不崩溃，安全回退到 `draft_answer`。同理，Revision 异常或返回空时，同样安全回退到 `draft_answer`。
+4. **原始草稿不可变保留**：无论后续是否经过 Revision，Trace 中的 `llm` step 始终完整保留原始模型返回的 `raw_output`（即 `draft_answer`），`final_output` 中同时记录 `draft_answer` 与 `revised_answer`，确保诊断可回溯。
 
-**只需替换 `reflect()` 函数体，`pipeline.py` 不需要任何改动**：
+### 2. Reflection 评审维度与提示词
+由 `prompt_builder.build_reflection_prompt` 生成，对草稿回答进行严格的审校：
+- **Factual correctness**：断言是否被检索 context 支撑，标注不支持或矛盾的主张。
+- **Direct relevance**：各部分是否直接针对用户提问，严禁堆砌无关背景信息。
+- **Scope control**：区分必要信息、有效支撑细节、以及相关但多余的信息。
+- **Completeness**：是否遗漏检索 context 中已包含的关键必要事实。
+- **Evidence support**：所有主张是否有可靠文本支撑。
+
+### 3. 结构化输出解析 (`ParsedReflection`)
+Reflection 模型输出被 `reflection.parse_reflection_output` 解析为结构化对象：
+- `decision`：`"PASS"` 或 `"REVISE"`（若无法识别有效决策则视为异常回退）
+- `reasons`：`List[str]` 评审理由
+- `unnecessary_content`：`List[str]` 冗余或超范围内容
+- `missing_information`：`List[str]` 遗漏的重要信息
+- `unsupported_claims`：`List[str]` 缺乏证据支撑的断言
+
+### 4. 独立 Reflection 模型配置
+支持为 Reflection 配置独立的端点和模型（如使用轻量或更强审查能力的模型），若未配置则无缝回退至主 LLM 配置：
+- `REFLECTION_ENABLED`：是否启用 Reflection（默认 `true`，设为 `false` 则完全跳过 Reflection 和 Revision）
+- `REFLECTION_MODEL`：独立审查模型 ID（未设置时回退至 `LLM_MODEL`）
+- `REFLECTION_BASE_URL`：独立端点 base_url（未设置时回退至 `LLM_BASE_URL`）
+- `REFLECTION_API_KEY`：独立 API 密钥（未设置时回退至 `LLM_API_KEY`，Trace 中绝不记录密钥）
+
+### 5. 数据结构 (`models.py`)
 
 ```python
-# pipeline.py L67-68（调用方式，下阶段不变）
-reflection_result = reflection.reflect(draft_answer, context, chunks)
-# 继续使用 reflection_result.final_answer 和 reflection_result.passed
-```
-
-下阶段实现建议方向（见 [下一阶段任务](#下一阶段任务)）。
-
-### ReflectionResult 数据结构
-
-```python
-# models.py L28-39
+@dataclass
+class ParsedReflection:
+    decision: Optional[str] = None
+    reasons: List[str] = field(default_factory=list)
+    unnecessary_content: List[str] = field(default_factory=list)
+    missing_information: List[str] = field(default_factory=list)
+    unsupported_claims: List[str] = field(default_factory=list)
 
 @dataclass
 class ReflectionResult:
-    passed: bool          # 校验是否通过
-    final_answer: str     # 最终答案（通过时 == draft_answer；不通过时为修正后文本）
-    notes: str            # 说明信息（调试用，不展示给用户）
+    enabled: bool
+    status: str                    # "success" | "error" | "skipped"
+    passed: Optional[bool]
+    final_answer: str
+    notes: str
+    decision: Optional[str] = None # "PASS" | "REVISE"
+    raw_output: str = ""
+    parsed_result: Optional[ParsedReflection] = None
+    model_source: str = ""         # "REFLECTION_MODEL" | "LLM_MODEL fallback"
+    duration_ms: Optional[float] = None
+    error: Optional[str] = None
+
+@dataclass
+class RevisionResult:
+    executed: bool
+    status: str                    # "success" | "error" | "skipped"
+    revised_answer: str
+    input: Dict[str, Any]
+    output: str
+    duration_ms: Optional[float] = None
+    error: Optional[str] = None
 ```
 
 ---
@@ -396,6 +447,10 @@ class ReflectionResult:
 | `QA_TOP_K` | `5` | 检索 Top-K 数量 |
 | `QA_CONFIDENCE_THRESHOLD` | `0.5` | ⚠ cosine distance 阈值，**未经校准** |
 | `QA_EMBEDDING_MODEL` | `bge_m3` | embedding 模型名，须与 ChromaDB collection 对应 |
+| `REFLECTION_ENABLED` | `true` | 是否启用 Reflection 闭环审查（可设为 `false` 关闭） |
+| `REFLECTION_MODEL` | `""` (默认留空) | 独立审查模型 ID（未设置时回退至 `LLM_MODEL`） |
+| `REFLECTION_BASE_URL` | `""` (默认留空) | 独立审查 OpenAI 兼容端点（未设置时回退至 `LLM_BASE_URL`） |
+| `REFLECTION_API_KEY` | `""` (默认留空) | 独立审查端点 API 密钥（未设置时回退至 `LLM_API_KEY`） |
 
 ### 启动示例（Windows）
 

@@ -84,6 +84,8 @@ body {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr var(--trace-w);
   height: 100vh;
+  /* Transition is overridden by inline style when dragging; only fires for
+     sidebar / trace collapse-toggle keyboard/click events. */
   transition: grid-template-columns 0.18s ease;
 }
 .layout--sidebar-collapsed {
@@ -102,6 +104,7 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
+
 
 /* ---------- Sidebar ---------- */
 .sidebar {
@@ -610,7 +613,24 @@ body {
   flex-direction: column;
   gap: 16px;
   min-height: 100px;
+  /* VS Code / Claude style flat scrollbar — scoped to this element */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 170, 195, 0.18) transparent;
 }
+.chatwindow__messages::-webkit-scrollbar {
+  width: 5px;
+}
+.chatwindow__messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chatwindow__messages::-webkit-scrollbar-thumb {
+  background: rgba(160, 170, 195, 0.18);
+  border-radius: 3px;
+}
+.chatwindow__messages::-webkit-scrollbar-thumb:hover {
+  background: rgba(160, 170, 195, 0.38);
+}
+
 .chatwindow__empty {
   margin: auto;
   max-width: 480px;
@@ -773,6 +793,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative; /* needed for the drag divider child */
 }
 .tracepanel__header {
   display: flex;
@@ -780,6 +801,7 @@ body {
   gap: 10px;
   padding: 12px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .tracepanel__title {
   font-weight: 600;
@@ -787,6 +809,23 @@ body {
 .tracepanel__body {
   overflow-y: auto;
   padding: 12px;
+  flex: 1;
+  /* VS Code / Claude style flat scrollbar — scoped to this element */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 170, 195, 0.18) transparent;
+}
+.tracepanel__body::-webkit-scrollbar {
+  width: 5px;
+}
+.tracepanel__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tracepanel__body::-webkit-scrollbar-thumb {
+  background: rgba(160, 170, 195, 0.18);
+  border-radius: 3px;
+}
+.tracepanel__body::-webkit-scrollbar-thumb:hover {
+  background: rgba(160, 170, 195, 0.38);
 }
 .tracepanel__empty {
   color: var(--text-dim);
@@ -820,12 +859,46 @@ body {
   background: var(--bg-elev);
   overflow: hidden;
 }
+
+.tracepanel__divider {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 20;
+  background: transparent;
+  transition: background-color 0.15s ease;
+  user-select: none;
+  touch-action: none;
+}
+.tracepanel__divider::after {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+}
+.tracepanel__divider:hover {
+  background: rgba(108, 140, 255, 0.12);
+}
+
+/* Collapsible step head — now a button for accessibility */
 .trace-step__head {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
+  border: 0;
   border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.trace-step__head:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 .trace-step__name {
   font-weight: 600;
@@ -836,16 +909,26 @@ body {
   color: var(--text-dim);
 }
 .trace-step__ms {
-  margin-left: auto;
   font-size: 11px;
   color: var(--text-dim);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.trace-step__chevron {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-dim);
 }
 .trace-step--error .trace-step__status {
   color: #ff7b86;
 }
 .trace-step--error {
   border-color: var(--error-border);
+}
+.trace-step--skipped {
+  opacity: 0.55;
+}
+.trace-step--skipped .trace-step__status {
+  color: var(--text-dim);
 }
 .trace-step__detail {
   margin: 0;
@@ -857,6 +940,132 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+
+/* Structured step sections (used by llm step) */
+.trace-step__sections {
+  padding: 8px 0 4px;
+}
+.trace-section {
+  padding: 4px 10px 8px;
+  border-bottom: 1px solid rgba(42, 47, 58, 0.6);
+}
+.trace-section:last-child {
+  border-bottom: 0;
+}
+.trace-section__title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  display: inline-block;
+}
+.trace-section__collapsible {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin-bottom: 6px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.trace-section__collapsible:hover .trace-section__title {
+  color: var(--text);
+}
+.trace-section__chevron {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* Metadata key-value table */
+.trace-meta-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.trace-meta-table td {
+  padding: 2px 4px;
+  vertical-align: top;
+}
+.trace-meta-table__k {
+  color: var(--text-dim);
+  width: 40%;
+  word-break: break-word;
+}
+.trace-meta-table__v {
+  color: var(--text);
+  word-break: break-all;
+}
+
+/* Raw generation output block */
+.trace-raw-output {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.trace-raw-output__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.trace-raw-output__label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.trace-raw-output__copy {
+  font-size: 11px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: inherit;
+}
+.trace-raw-output__copy:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.trace-raw-output__body {
+  margin: 0;
+  padding: 8px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  /* Flat scrollbar inside the raw output block */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 170, 195, 0.18) transparent;
+}
+.trace-raw-output__body::-webkit-scrollbar {
+  width: 4px;
+}
+.trace-raw-output__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.trace-raw-output__body::-webkit-scrollbar-thumb {
+  background: rgba(160, 170, 195, 0.2);
+  border-radius: 3px;
+}
+
 
 /* ==========================================================================
    Document Import UI
