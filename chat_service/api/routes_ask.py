@@ -12,8 +12,9 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from chat_service.services.qa.models import AskRequest, AskResponse
 from chat_service.services.qa.service import answer_question
 
@@ -28,7 +29,11 @@ router = APIRouter()
 
 
 @router.post("/api/ask", response_model=AskResponse)
-def ask(request: AskRequest) -> AskResponse:
+def ask(
+    request: AskRequest,
+    user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    conversation_id: Optional[str] = Header(default=None, alias="X-Conversation-Id"),
+) -> AskResponse:
     """
     单次检索 + 生成问答。
 
@@ -40,7 +45,11 @@ def ask(request: AskRequest) -> AskResponse:
     错误以 200 响应返回（error 字段非 null），方便前端在 Ask 面板内渲染。
     """
     try:
-        result = answer_question(request.question)
+        result = answer_question(
+            request.question,
+            user_id=user_id,
+            thread_id=conversation_id,
+        )
         return AskResponse(
             answer=result.answer,
             sources=result.sources,

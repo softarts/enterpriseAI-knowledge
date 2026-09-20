@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from chat_service.trace import TraceBuilder
 from qa_service import config, llm_client, prompt_builder, reflection, retrieval, revision
@@ -27,12 +27,20 @@ logger = logging.getLogger(__name__)
 _NOT_FOUND_ANSWER = "根据现有知识库内容，未能找到与该问题相关的信息。"
 
 
-def answer_question(question: str) -> AnswerResult:
+def answer_question(
+    question: str,
+    user_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    memory_runtime: Optional[Any] = None,
+) -> AnswerResult:
     """
     对用户问题执行单次检索 + 单次生成，返回最终答案。
 
     Args:
         question: 用户输入的自然语言问题。
+        user_id: 用户级长期 memory namespace。
+        thread_id: LangGraph Checkpointer 使用的短期对话 thread。
+        memory_runtime: 可注入的 application-scoped MemoryRuntime。
 
     Returns:
         AnswerResult:
@@ -41,7 +49,44 @@ def answer_question(question: str) -> AnswerResult:
             passed_reflection — Reflection 校验结果（未找到时为 None）
     """
     question = (question or "").strip()
+    if memory_runtime is None and (user_id or thread_id):
+        try:
+            from langchain_memory import get_default_memory_runtime
+
+            memory_runtime = get_default_memory_runtime()
+        except Exception:
+            logger.warning("Memory runtime initialization failed", exc_info=True)
+
+    from langchain_memory import MemoryContext
+
+    if memory_runtime is not None:
+        memory_context = memory_runtime.prepare_context(
+            user_id=user_id,
+            thread_id=thread_id,
+            question=question,
+            top_k=config.TOP_K,
+        )
+    else:
+        memory_context = MemoryContext(
+            retrieval_query=question,
+            conversation_messages=[],
+            long_term_memories=[],
+        )
+
     trace = TraceBuilder()
+    trace.add_step(
+        "memory",
+        {
+            "enabled": memory_runtime is not None,
+            "user_id_present": bool(user_id),
+            "thread_id_present": bool(thread_id),
+            "store_type": type(memory_runtime.store).__name__ if memory_runtime is not None else None,
+            "retrieval_query": memory_context.retrieval_query,
+            "user_memories": len(memory_context.long_term_memories),
+            "short_term_messages": len(memory_context.conversation_messages),
+        },
+        status="ok" if memory_runtime is not None else "skipped",
+    )
     trace.add_step(
         "request",
         {"question": question, "question_chars": len(question), "top_k": config.TOP_K},
@@ -58,10 +103,19 @@ def answer_question(question: str) -> AnswerResult:
 
     # Step 1: 向量检索
     retrieval_started = time.perf_counter()
-    chunks = retrieval.retrieve(question, k=config.TOP_K)
+    logger.info(
+        "qa.retrieval.start memory_enabled=%s user_id_present=%s thread_id_present=%s query_chars=%d",
+        memory_runtime is not None,
+        bool(user_id),
+        bool(thread_id),
+        len(memory_context.retrieval_query),
+    )
+
+    chunks = retrieval.retrieve(memory_context.retrieval_query, k=config.TOP_K)
     trace.add_step(
         "retrieval",
         {
+            "query": memory_context.retrieval_query,
             "top_k": config.TOP_K,
             "count": len(chunks),
             "top_distance": chunks[0].distance if chunks else None,
@@ -99,9 +153,22 @@ def answer_question(question: str) -> AnswerResult:
         answer.trace = trace.build()
         return answer
 
-    # Step 3: 组装 context
-    context = prompt_builder.build_context(chunks)
-    trace.add_step("context", {"chars": len(context), "chunks": len(chunks)})
+    # Step 3: 组装 enterprise context and optional conversational context.
+    enterprise_context = prompt_builder.build_context(chunks)
+    context = memory_context.format_with_enterprise_context(enterprise_context)
+    trace.add_step(
+        "context",
+        {
+            "chars": len(context),
+            "enterprise_chars": len(enterprise_context),
+            "chunks": len(chunks),
+            "memory_enabled": memory_runtime is not None,
+            "user_id_present": bool(user_id),
+            "thread_id_present": bool(thread_id),
+            "user_memories": len(memory_context.long_term_memories),
+            "short_term_messages": len(memory_context.conversation_messages),
+        },
+    )
 
     # Step 4: 渲染 system prompt（把 context 填入 SYSTEM_PROMPT 的 {context} 占位符）
     system_prompt = prompt_builder.SYSTEM_PROMPT.format(context=context)
@@ -174,7 +241,7 @@ def answer_question(question: str) -> AnswerResult:
     else:
         reflection_result = reflection.reflect(
             question=question,
-            context=context,
+            context=enterprise_context,
             draft_answer=draft_answer,
             retrieved_chunks=chunks,
         )
@@ -230,7 +297,7 @@ def answer_question(question: str) -> AnswerResult:
         if reflection_result.status == "success" and reflection_result.decision == "REVISE":
             revision_result = revision.revise(
                 question=question,
-                context=context,
+                context=enterprise_context,
                 draft_answer=draft_answer,
                 reflection_result=reflection_result,
             )
@@ -304,5 +371,13 @@ def answer_question(question: str) -> AnswerResult:
         },
     )
     answer.trace = trace.build()
+
+    if memory_runtime is not None:
+        memory_runtime.record_turn(
+            user_id=user_id,
+            thread_id=thread_id,
+            question=question,
+            answer=final_answer,
+        )
     return answer
 

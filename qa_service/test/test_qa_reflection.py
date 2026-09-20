@@ -1,6 +1,4 @@
-"""
-tests/test_qa_reflection.py — Unit tests for the Closed-Loop QA Reflection & Revision pipeline.
-"""
+"""Unit tests for the Closed-Loop QA Reflection & Revision pipeline."""
 
 from __future__ import annotations
 
