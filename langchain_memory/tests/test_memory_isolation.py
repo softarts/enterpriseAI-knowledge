@@ -53,14 +53,30 @@ class TestUserIsolation(unittest.TestCase):
         self.assertEqual(len(user_b_items), 0)
 
         # Now run graph invocation for User B
+        def mock_tool_call_rule(messages):
+            last_human = next(
+                (m for m in reversed(messages) if getattr(m, "type", "") == "human"),
+                None,
+            )
+            if last_human and "喜欢什么" in str(last_human.content):
+                return {"name": "search_memory", "args": {"query": "料理偏好"}}
+            return None
+
         def mock_llm_response(messages):
-            system_msg = messages[0].content
-            # If User A's memory leaked into system prompt, flag it
-            if "日本料理" in system_msg:
+            tool_message = next(
+                (m for m in reversed(messages) if getattr(m, "type", "") == "tool"),
+                None,
+            )
+            tool_text = str(getattr(tool_message, "content", "")) if tool_message else ""
+            # If User A's memory leaked into the tool result, flag it
+            if "日本料理" in tool_text:
                 return "泄漏了用户A的记忆！"
             return "对不起，我还没有关于你喜欢什么料理的记忆。"
 
-        mock_llm = DeterministicMockChatModel(response_generator=mock_llm_response)
+        mock_llm = DeterministicMockChatModel(
+            response_generator=mock_llm_response,
+            tool_call_rule=mock_tool_call_rule,
+        )
         checkpointer = MemorySaver()
         graph = build_memory_graph(
             llm=mock_llm,
@@ -79,10 +95,14 @@ class TestUserIsolation(unittest.TestCase):
             config=config_user_b,
         )
 
-        # Verified: User B has empty retrieved_memories
-        self.assertEqual(turn_b.get("retrieved_memories"), [])
+        # Verified: the search_memory tool found nothing in User B's own namespace
+        tool_messages = [m for m in turn_b["messages"] if getattr(m, "type", "") == "tool"]
+        self.assertEqual(len(tool_messages), 1)
+        self.assertNotIn("日本料理", tool_messages[0].content)
+        self.assertIn("未找到与该查询相关的长期记忆", tool_messages[0].content)
         self.assertNotIn("日本料理", turn_b["messages"][-1].content)
         self.assertIn("还没有关于你喜欢什么料理的记忆", turn_b["messages"][-1].content)
+
 
 
 if __name__ == "__main__":

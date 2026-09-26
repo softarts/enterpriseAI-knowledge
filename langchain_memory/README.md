@@ -28,9 +28,10 @@
 20. [真实对话流程示例 (Example Conversation)](#20-真实对话流程示例-example-conversation)
 21. [核心实现代码片段 (Actual Code Snippets)](#21-核心实现代码片段-actual-code-snippets)
 22. [源码精确行号索引 (Source Code Line Index)](#22-源码精确行号索引-source-code-line-index)
-23. [已知限制 (Known Limitations)](#23-已知限制-known-limitations)
-24. [V2 规划 (V2 Candidates)](#24-v2-规划-v2-candidates)
-25. [Completion Report (完工报告)](#25-completion-report-完工报告)
+23. [企业 QA Pipeline 集成 (Enterprise QA Integration)](#23-企业-qa-pipeline-集成-enterprise-qa-integration)
+24. [已知限制 (Known Limitations)](#24-已知限制-known-limitations)
+25. [V2 规划 (V2 Candidates)](#25-v2-规划-v2-candidates)
+26. [Completion Report (完工报告)](#26-completion-report-完工报告)
 
 ---
 
@@ -98,17 +99,18 @@
 
 ```mermaid
 flowchart TD
-    Start([START]) --> RetrieveNode["1. retrieve_memory<br/>(从 Store 检索当前 user_id 的长期记忆)"]
-    RetrieveNode --> GenNode["2. generate_response<br/>(组装 Prompt + 短期历史 + 长期记忆上下文，调用 LLM)"]
-    GenNode --> UpdateNode["3. update_memory<br/>(LLM 结构化提取长期事实并写入 Store)"]
+    Start([START]) --> Agent["agent<br/>(回答用户；LLM 自主判断是否检索及 query)"]
+    Agent -->|tool call| Tools["tools<br/>(search_memory，限定当前 user_id namespace)"]
+    Tools --> Agent
+    Agent -->|无 tool call / 最终回答| UpdateNode["update_memory<br/>(LLM 结构化提取并写入 Store)"]
     UpdateNode --> EndNode([END])
 
     subgraph "Short-term Memory (Thread Scope)"
-        CP[Checkpointer: MemorySaver] -.->|恢复/保存会话状态| GenNode
+      CP[Checkpointer: MemorySaver] -.->|按 thread_id 恢复/保存 messages| Agent
     end
 
     subgraph "Long-term Memory (User Scope)"
-        Store[(LangGraph Store: InMemoryStore)] -->|语义搜索| RetrieveNode
+      Store[(LangGraph Store: InMemoryStore)] <-->|search / write| Tools
         UpdateNode -->|持久化写入| Store
     end
 ```
@@ -117,20 +119,15 @@ flowchart TD
 
 ## 5. Graph 工作流设计 (Graph Flow)
 
-LangGraph 采用纯线性三节点结构：
-1. **`retrieve_memory`**：
-   - 提取输入消息中最新的用户 Query。
-   - 读取配置中的 `user_id`，在 `("users", user_id, "memories")` 命名空间下执行语义检索。
-   - 将检索到的记忆列表存入 `state["retrieved_memories"]`。
-2. **`generate_response`**：
-   - 将长期记忆格式化为背景上下文，注入 System Prompt 中。
-   - 明确标记长期记忆是 Background Context，非指令，防止 Prompt 注入攻击。
-   - 传入线程内所有的对话消息（短期记忆由 Checkpointer 自动累积恢复）。
-   - LLM 生成回复并作为 `AIMessage` 追加到 `messages`。
-3. **`update_memory`**：
+图由回答 Agent、工具执行节点和写入节点组成：
+1. **`agent`**：最终回答使用的同一个 LLM。它读取当前问题、短期对话上下文和企业知识上下文，自主决定直接回答，或调用 `search_memory` 并提供 query。
+2. **`tools`**：执行 `search_memory`，将检索结果作为 `ToolMessage` 返回给 Agent；Agent 可基于结果继续回答或再次调用工具。`user_id` 和 Store 由 LangGraph 注入，不暴露为模型可控参数。
+3. **`update_memory`**：仅在 Agent 不再请求工具、产生最终回答后执行；
    - 调用结构化输出模型（`MemoryExtraction`）。
    - 若 `should_store=True`，将记忆条目及元数据写入 Store。
    - 异常安全捕获，失败不中断回复。
+
+流程：`START -> agent -> (tools -> agent)* -> update_memory -> END`。没有固定的检索节点。
 
 ---
 
@@ -140,7 +137,7 @@ LangGraph 采用纯线性三节点结构：
 - **作用域**：`thread_id`。
 - **QA 入口**：`MemoryRuntime.prepare_context()` 读取当前 thread 的历史；`MemoryRuntime.record_turn()` 在回答完成后写入本轮 user/assistant 消息。
 - **工作机制**：同一个 `thread_id` 会恢复同一个 Checkpoint，历史消息由 `add_messages` 累加。`user_id` 不参与短期记忆定位；它只用于长期记忆 Store。
-- **追问检索**：`build_retrieval_query()` 取最近最多 6 条消息中的用户问题；只有短问题或 `How about` / `What about` / `Then` 等明显追问才拼接最近 2 个问题。较长的独立问题只使用当前问题，避免连续评测问题互相污染。它只影响 enterprise vector retrieval 的 query，不会改变用户最终看到的问题。
+- **检索决策**：长期记忆不在 `prepare_context()` 预先检索；最终回答 Agent 可根据完整上下文自行决定是否调用 `search_memory` 及其 query。企业知识库检索只使用当前用户问题原文，不做表面字符串追问判断或历史问题拼接。
 - **严禁使用**：`ConversationBufferMemory` 等遗留 LangChain API。
 
 ### 6.1 短期记忆的读取流程
@@ -150,8 +147,8 @@ LangGraph 采用纯线性三节点结构：
 1. 如果没有 `thread_id`，不读取短期 Checkpoint，`conversation_messages=[]`。
 2. 如果有 `thread_id`，调用 `get_thread_messages(thread_id)`，使用同一个 Checkpointer 配置读取该 thread 的 State。
 3. 从 `state.values["messages"]` 取出消息列表。消息包含之前保存的 `HumanMessage` 和 `AIMessage`。
-4. 当前问题交给 `build_retrieval_query()`。它只从最近 6 条 State 消息中筛选用户问题，不读取其他用户的 thread。
-5. `MemoryContext.conversation_messages` 用于 LLM 的 `SHORT-TERM CONVERSATION`；`MemoryContext.retrieval_query` 只用于企业知识向量检索。
+4. 短期历史只进入 `MemoryContext.conversation_messages`，用于构造回答上下文；不会被启发式规则拼接进企业知识库 query。
+5. `MemoryContext.retrieval_query` 保持当前用户问题原文，仅用于企业知识向量检索。长期记忆由同一个回答 Agent 在工具循环中按需检索。
 
 读取当前 thread 的核心代码等价于：
 
@@ -178,58 +175,9 @@ X-Conversation-Id: conversation_456
 
 因此，同一个 `conversation_456` 可以读到之前保存的消息；换成 `conversation_789` 就是另一段短期对话。
 
-### 6.2 短期记忆如何影响检索
+### 6.2 短期历史与检索 query
 
-短期历史读取后，并不是所有历史问题都会拼接到向量检索 query。当前规则是：
-
-```python
-def build_retrieval_query(self, thread_id: str, question: str) -> str:
-  state = self.conversation_graph.get_state(
-    {"configurable": {"thread_id": thread_id}}
-  )
-  messages = list((state.values if state else {}).get("messages", []))
-
-  previous_questions = [
-    str(message.content).strip()
-    for message in messages[-6:]
-    if getattr(message, "type", "") == "human"
-    and str(message.content).strip()
-  ]
-
-  # 短问题或明显追问才带上最近两个历史问题。
-  is_short_follow_up = len(question.split()) <= 8
-  is_prefixed_follow_up = " ".join(question.split()).casefold().startswith(
-    ("how about", "what about", "and ", "then ")
-  )
-  selected_questions = (
-    previous_questions[-2:]
-    if is_short_follow_up or is_prefixed_follow_up
-    else []
-  )
-  return "\n".join(selected_questions + [question])
-```
-
-例如短追问：
-
-```text
-历史问题：How does the organization recognize customer revenue?
-当前问题：How about Hosted API?
-
-retrieval_query:
-How does the organization recognize customer revenue?
-How about Hosted API?
-```
-
-而较长的独立问题：
-
-```text
-当前问题：What mandatory fields and digital signature components must be included in a compliance evidence bundle manifest?
-
-retrieval_query:
-What mandatory fields and digital signature components must be included in a compliance evidence bundle manifest?
-```
-
-注意：即使独立问题没有拼接历史，`conversation_messages` 仍会进入 LLM context，用于理解必要的代词或上下文；它不会因此改变 enterprise retrieval query。
+短期历史用于回答上下文，不通过长度、前缀或其他字符串启发式改写检索 query。企业知识库使用当前问题原文；最终回答 Agent 可在理解完整上下文后，自主选择是否调用长期记忆工具，并为工具生成独立 query。两种检索用途互不复用 query。
 
 ### 6.3 短期记忆如何写入
 
@@ -260,7 +208,15 @@ memory_context = memory_runtime.prepare_context(
 )
 
 chunks = retrieval.retrieve(memory_context.retrieval_query, k=config.TOP_K)
-answer = generate_answer(memory_context, chunks, question)
+enterprise_context = prompt_builder.build_context(chunks)
+context = memory_context.format_with_enterprise_context(enterprise_context)
+answer = memory_runtime.generate_answer_with_memory(
+  llm=llm_client.get_llm(),
+  system_prompt=prompt_builder.SYSTEM_PROMPT.format(context=context),
+  question=question,
+  user_id=user_id,
+  top_k=config.TOP_K,
+)
 
 memory_runtime.record_turn(
   user_id=user_id,
@@ -272,18 +228,7 @@ memory_runtime.record_turn(
 
 所以“查询短期记忆”和“保存短期记忆”是两个时点：请求开始时读取，最终答案确定后写入。当前实现使用进程内 `MemorySaver`，服务重启后 Checkpoint 会消失。
 
-实际追问示例：
-
-```text
-第一个问题：How does the organization recognize customer revenue and allocate transaction prices across deliverables?
-第二个问题：那么托管 API是怎么收入确认的
-
-retrieval_query:
-How does the organization recognize customer revenue and allocate transaction prices across deliverables?
-那么托管 API是怎么收入确认的
-```
-
-对应代码：`langchain_memory/app/runtime.py:164-181`。
+企业 KB 检索 query 始终是当前问题原文；追问所需的上下文由 Checkpointer 恢复并提供给回答 Agent，不通过硬编码规则拼接 query。
 
 ---
 
@@ -292,17 +237,18 @@ How does the organization recognize customer revenue and allocate transaction pr
 - **技术载体**：`LangGraph Store (InMemoryStore)`。
 - **作用域**：`user_id`。
 - **跨会话持久**：即使用户在不同对话线程（`thread_A` vs `thread_B`），只要 `user_id` 相同，均可检索并共享其长期画像与偏好。
-- **准备阶段**：`MemoryRuntime.prepare_context()` 在 enterprise vector retrieval 之前执行长期记忆 semantic search。
-- **触发条件**：请求同时具备可用的 `memory_runtime` 和 `user_id` 时触发检索；`thread_id` 不是长期记忆检索的必要条件。检索 query 使用已经生成的 `retrieval_query`，因此同 thread 追问会使用拼接后的 query。
-- **不触发的情况**：没有 `user_id`、memory runtime 初始化失败，或 Store 检索异常时，`long_term_memories` 为空，但 QA 继续执行。
+- **准备阶段**：`MemoryRuntime.prepare_context()` 只读取 Checkpointer 中的短期历史；不访问长期记忆 Store。
+- **触发条件**：最终回答 Agent 根据当前问题和对话上下文自主判断是否调用 `search_memory`，并自主生成 query。工具通过 `InjectedStore` 访问 Store，通过 `RunnableConfig` 读取可信的 `user_id` 和 `top_k`。
+- **不触发的情况**：Agent 判断无需用户历史、没有 `user_id`，或工具调用失败时，不会暴露其他用户数据；调用失败以友好结果处理，回答流程继续。
 - **写入触发**：每轮生成最终答案后，`MemoryRuntime.record_turn()` 才会调用结构化 `MemoryExtraction`。只有模型返回 `should_store=True` 且 `memory` 非空时，才调用 `save_user_memory()` 写入 Store；普通知识问答通常不会产生长期记忆。
 
 对应代码：
 
-- 准备与检索：`langchain_memory/app/runtime.py:69-110`
-- 写入与 extraction：`langchain_memory/app/runtime.py:112-151`
-- Store semantic search：`langchain_memory/app/memory.py:36-85`
-- Store persistence：`langchain_memory/app/memory.py:88-143`
+- 短期历史准备：`langchain_memory/app/runtime.py` 中的 `MemoryRuntime.prepare_context()`
+- 工具 Agent 循环：`langchain_memory/app/graph.py` 中的 `build_memory_agent_graph()`
+- Store semantic search：`langchain_memory/app/memory.py` 中的 `create_search_memory_tool()` / `retrieve_user_memories()`
+- 写入与 extraction：`langchain_memory/app/runtime.py:161-209`
+- Store persistence：`langchain_memory/app/memory.py:108-169`
 
 ---
 
@@ -343,9 +289,10 @@ How does the organization recognize customer revenue and allocate transaction pr
 ## 11. Memory Retrieval (长期记忆检索)
 
 - 底层接口：`retrieve_user_memories(store, user_id, query, top_k=3)`。
-- QA 推荐入口：`MemoryRuntime.prepare_context(user_id, thread_id, question, top_k)`，不要由 `qa_service` 直接访问 Store。
-- 执行顺序：读取 thread history → 生成 `retrieval_query` → 以 `user_id` namespace 检索长期记忆 → 返回 `MemoryContext`。
-- 容错保护：Store 访问异常记录日志并返回 `[]`；QA 仍继续执行，不虚构记忆。
+- 工具入口：`create_search_memory_tool()` 创建 `search_memory`；由最终回答 Agent 绑定并在回答过程中调用，不由 `prepare_context()` 调用。
+- 执行顺序：读取 thread history → 企业 KB 使用当前问题检索 → 回答 Agent 自主决定是否调用 `search_memory` → 工具在当前 `user_id` namespace 做语义检索 → ToolMessage 返回同一 Agent → 生成最终回答。
+- 安全边界：工具只接收模型提供的 `query`；Store 与 `user_id` 由运行时注入。工具内部只使用 `("users", user_id, "memories")`，不做跨用户扫描。
+- 容错保护：Store 访问失败记录日志并向 Agent 返回友好错误文本；不抛出异常中断回答，也不把错误文本解析成记忆。
 
 `MemoryContext` 的当前结构：
 
@@ -354,10 +301,9 @@ How does the organization recognize customer revenue and allocate transaction pr
 class MemoryContext:
   retrieval_query: str
   conversation_messages: List[BaseMessage]
-  long_term_memories: List[str]
 ```
 
-定义位置：`langchain_memory/app/runtime.py:34-58`。
+定义位置：`langchain_memory/app/runtime.py:38-56`。
 
 ---
 
@@ -374,8 +320,8 @@ class MemoryExtraction(BaseModel):
 - **允许保存**：稳定偏好（如饮食习惯）、常住地与职业背景、长期目标、用户明确要求记住的事项。
 - **禁止保存**：临时问题（“今天天气”）、数学计算（“2+2”）、一次性闲聊（“讲个笑话”）。
 - **拒绝脆弱字符解析**：绝不使用 `if "yes" in text` 等脆弱方式。
-- QA 主路径统一调用 `extract_and_save_memory()`，位置为 `langchain_memory/app/memory.py:146-176`。
-- `MemoryRuntime.record_turn()` 负责准备 thread history、调用 structured output，并把最终写入委托给该公共函数，位置为 `langchain_memory/app/runtime.py:112-151`。
+- QA 主路径统一调用 `extract_and_save_memory()`，位置为 `langchain_memory/app/memory.py:172-218`。
+- `MemoryRuntime.record_turn()` 负责准备 thread history、调用 structured output，并把最终写入委托给该公共函数，位置为 `langchain_memory/app/runtime.py:161-209`。
 
 ---
 
@@ -399,10 +345,10 @@ class MemoryExtraction(BaseModel):
 
 ## 14. 容错与异常处理 (Error Handling)
 
-1. **Store 检索失败**：记录异常日志，`retrieved_memories` 置为空列表，模型仅凭当前对话正常回复。
+1. **Store 检索失败**：工具记录异常并返回友好错误结果；Agent 忽略检索结果后继续回答。
 2. **提取失败 / 接口限流**：记录 Warning 日志，忽略本轮记忆写入，正常将生成的回复返回给用户。
 3. **写入失败**：记录日志，不欺骗用户已记住信息。
-4. **Prompt 安全防御**：系统提示词强制声明记忆为 Background Context，不得覆盖系统安全指令。
+4. **Prompt 安全防御**：系统提示词声明工具返回内容仅是背景信息，不得覆盖系统安全指令。
 
 ---
 
@@ -491,7 +437,6 @@ memory_context = memory_runtime.prepare_context(
 
 print(memory_context.retrieval_query)
 print(memory_context.conversation_messages)
-print(memory_context.long_term_memories)
 
 # enterprise retrieval / LLM 完成后：
 memory_runtime.record_turn(
@@ -530,7 +475,7 @@ PYTHONPATH=. python3 -m unittest tests/test_non_memory.py
 python3 -m pytest qa_service/test langchain_memory/tests -q
 ```
 
-当前重构后的验证结果：`36 passed`。QA memory 测试位于 `qa_service/test/test_qa_memory_integration.py`，LangChain memory 单元测试位于 `langchain_memory/tests/`。
+QA memory 测试位于 `qa_service/test/test_qa_memory_integration.py`，LangChain memory 单元测试位于 `langchain_memory/tests/`。此前记录的验证数字对应旧实现，不代表当前实现；本次更新未运行测试。
 
 ---
 
@@ -556,29 +501,22 @@ python3 -m pytest qa_service/test langchain_memory/tests -q
 
 ## 21. 核心实现代码片段 (Actual Code Snippets)
 
-### 21.1 Graph 构建与编译 (`app/graph.py`)
+### 21.1 Agent 工具循环与写入节点 (`app/graph.py`)
 ```python
-def build_memory_graph(
-    llm: Optional[BaseChatModel] = None,
-    checkpointer: Optional[BaseCheckpointSaver] = None,
-    store: Optional[BaseStore] = None,
-    top_k: int = app_config.DEFAULT_TOP_K,
-) -> CompiledStateGraph:
-    active_llm = llm or app_config.get_chat_model()
-    active_checkpointer = checkpointer if checkpointer is not None else MemorySaver()
-    active_store = store if store is not None else create_memory_store()
-
-    workflow = StateGraph(MemoryGraphState)
-    workflow.add_node("retrieve_memory", create_retrieve_memory_node(top_k))
-    workflow.add_node("generate_response", create_generate_response_node(active_llm))
-    workflow.add_node("update_memory", create_update_memory_node(active_llm))
-
-    workflow.add_edge(START, "retrieve_memory")
-    workflow.add_edge("retrieve_memory", "generate_response")
-    workflow.add_edge("generate_response", "update_memory")
-    workflow.add_edge("update_memory", END)
-
-    return workflow.compile(checkpointer=active_checkpointer, store=active_store)
+tools = [create_search_memory_tool(top_k)]
+workflow = StateGraph(MemoryGraphState)
+workflow.add_node("agent", create_agent_node(llm, tools))
+workflow.add_node("tools", ToolNode(tools))
+workflow.add_node("update_memory", create_update_memory_node(llm))
+workflow.add_edge(START, "agent")
+workflow.add_conditional_edges(
+  "agent",
+  lambda state: "tools" if _has_pending_tool_calls(state) else "update_memory",
+  {"tools": "tools", "update_memory": "update_memory"},
+)
+workflow.add_edge("tools", "agent")
+workflow.add_edge("update_memory", END)
+compiled = workflow.compile(checkpointer=active_checkpointer, store=active_store)
 ```
 
 ### 21.2 QA Memory facade (`app/runtime.py`)
@@ -588,7 +526,6 @@ def build_memory_graph(
 class MemoryContext:
   retrieval_query: str
   conversation_messages: List[BaseMessage]
-  long_term_memories: List[str]
 
 
 memory_context = memory_runtime.prepare_context(
@@ -599,29 +536,32 @@ memory_context = memory_runtime.prepare_context(
 )
 chunks = retrieval.retrieve(memory_context.retrieval_query, k=config.TOP_K)
 context = memory_context.format_with_enterprise_context(enterprise_context)
+draft_answer = memory_runtime.generate_answer_with_memory(
+  llm=llm_client.get_llm(),
+  system_prompt=prompt_builder.SYSTEM_PROMPT.format(context=context),
+  question=question,
+  user_id=user_id,
+  top_k=config.TOP_K,
+)
 ```
 
-当前实现位置：`langchain_memory/app/runtime.py:34-58`、`langchain_memory/app/runtime.py:69-110`。
+当前实现位置：`langchain_memory/app/runtime.py:38-56`、`langchain_memory/app/runtime.py:71-108`、`langchain_memory/app/runtime.py:111-158`。
 
-### 21.3 记忆检索节点 (`app/graph.py`)
+### 21.3 长期记忆检索工具 (`app/memory.py`)
 ```python
-def create_retrieve_memory_node(top_k_default: int = app_config.DEFAULT_TOP_K):
-    def retrieve_memory(
-        state: MemoryGraphState,
-        config: RunnableConfig,
-        *,
-        store: BaseStore,
-    ) -> Dict[str, Any]:
-        configurable = config.get("configurable", {})
-        user_id: Optional[str] = configurable.get("user_id")
-        top_k: int = configurable.get("top_k", top_k_default)
-        ...
-        memories = retrieve_user_memories(
-            store=store, user_id=user_id, query=last_user_message, top_k=top_k
-        )
-        return {"retrieved_memories": memories}
-    return retrieve_memory
+search_memory_tool = create_search_memory_tool(default_top_k=top_k)
+answer_agent = build_memory_agent_graph(
+    llm=answer_llm,
+    store=store,
+    tools=[search_memory_tool],
+)
+result = answer_agent.invoke(
+    {"messages": [SystemMessage(content=system_prompt), HumanMessage(content=question)]},
+    config={"configurable": {"user_id": user_id, "top_k": top_k}},
+)
 ```
+
+工具 schema 只向模型暴露 `query`；`store` 和 `user_id` 由运行时注入，检索固定在该用户的 namespace。工具内部实现在 `app/memory.py:221-268`。
 
 ### 21.4 结构化记忆提取与持久化节点 (`app/graph.py`)
 ```python
@@ -699,50 +639,49 @@ def save_user_memory(
 
 ## 22. 源码精确行号索引 (Source Code Line Index)
 
-所有行号与当前最终源代码绝对严格对应：
+以下索引按本次更新后的代码路径整理；当前实现不再包含固定检索节点或 `build_retrieval_query()`。
 
 - **`app/config.py`**：
-  - `14-30`：环境变量解析与全局配置常量 (`OPENAI_API_KEY`, `MODEL_NAME`, `EMBEDDING_MODEL`, `DEFAULT_TOP_K`)。
-  - `33-52`：`get_chat_model()` 统一工厂函数。
-  - `55-72`：`get_embeddings()` 向量模型工厂函数。
+  - `15-34`：环境变量解析与全局配置常量。
+  - `37-56`：`get_chat_model()` 统一工厂函数。
+  - `59-87`：`get_embeddings()` 向量模型工厂函数。
 - **`app/state.py`**：
-  - `12-21`：`MemoryGraphState` 定义（包含 `messages` 与 `retrieved_memories`）。
+  - `12-24`：`MemoryGraphState` 定义；tool results 使用 `ToolMessage`，无独立预取记忆字段。
 - **`app/prompts.py`**：
-  - `15-33`：`MemoryExtraction(BaseModel)` 结构化记忆提取 Schema。
-  - `40-44`：`BASE_SYSTEM_PROMPT` 基础系统提示词与安全性边界说明。
-  - `47-59`：`format_system_prompt_with_memories()` 动态上下文拼接函数。
-  - `62-75`：`MEMORY_EXTRACTION_PROMPT` 提取专家指令。
+  - `15-34`：`MemoryExtraction(BaseModel)` 结构化记忆提取 Schema。
+  - `40-50`：`BASE_SYSTEM_PROMPT` 工具调用指导与安全性边界。
+  - `52-66`：`MEMORY_EXTRACTION_PROMPT` 提取专家指令。
 - **`app/memory.py`**：
-  - `25-33`：`get_user_memory_namespace()` 用户隔离命名空间计算。
-  - `36-85`：`retrieve_user_memories()` 长期记忆检索与安全降级。
-  - `88-143`：`save_user_memory()` 结构化 Payload 组装与 Store 写入。
-  - `146-176`：`extract_and_save_memory()` 统一 extraction 与 persistence 入口。
-  - `178-195`：`create_memory_store()` 语义索引 InMemoryStore 初始化。
+  - `29-37`：`get_user_memory_namespace()` 用户隔离命名空间计算。
+  - `40-105`：`retrieve_user_memories()` 长期记忆检索与安全降级。
+  - `108-169`：`save_user_memory()` Store 写入。
+  - `172-218`：`extract_and_save_memory()` extraction 与 persistence 入口。
+  - `221-268`：`create_search_memory_tool()`，LLM 可调用的用户隔离检索工具。
+  - `271-295`：`create_memory_store()` 语义索引 InMemoryStore 初始化。
 - **`app/graph.py`**：
-  - `29-63`：`create_retrieve_memory_node()` 检索节点。
-  - `66-84`：`create_generate_response_node()` 对话生成节点。
-  - `87-135`：`create_update_memory_node()` 结构化提取与容错保存节点。
-  - `138-168`：`build_memory_graph()` 工作流装配与编译。
+  - `51-75`：`create_agent_node()`，将工具绑定至回答 LLM并组装系统提示词。
+  - `78-141`：`create_update_memory_node()`，回复后的结构化提取与容错保存。
+  - `144-166`：`build_memory_agent_graph()` Agent ↔ tools 回路。
+  - `170-214`：`build_memory_graph()` 带 Checkpointer 和回复后写入节点的完整图。
 - **`app/runtime.py`**：
-  - `34-58`：`MemoryContext` 及 enterprise context 格式化。
-  - `69-110`：`MemoryRuntime.prepare_context()`，统一读取短期历史、改写 retrieval query、检索长期记忆。
-  - `112-151`：`MemoryRuntime.record_turn()`，写入短期 turn 并触发长期记忆 extraction。
-  - `164-181`：`build_retrieval_query()`，拼接最近用户问题。
-  - `183-199`：thread history 读取与 turn 写入。
-  - `232-237`：runtime 工厂和 process-scoped default runtime。
+  - `38-59`：`MemoryContext` 与对话上下文格式化。
+  - `62-108`：`MemoryRuntime.prepare_context()`，只读取短期历史并保留当前问题作为企业检索 query。
+  - `111-158`：`generate_answer_with_memory()`，最终回答 Agent 在同一循环中自主调用工具。
+  - `161-209`：`record_turn()`，保存短期 turn 并执行独立的长期记忆提取/写入。
+  - `222-252`：thread history 读取与 turn 写入。
+  - `255-302`：runtime 工厂和 process-scoped default runtime。
+- **`qa_service/pipeline.py`**：`177-190` 调用 memory-enabled answer agent；失败时回退至原有文本生成。
 - **`__init__.py`**：
   - `3-5`：对外暴露 `MemoryContext`、`MemoryRuntime`、`get_default_memory_runtime`。
 - **`main.py`**：
   - `11-80`：`run_demo()` 完整功能演示入口。
 - **测试用例**：
-  - `langchain_memory/tests/test_short_term_memory.py: 23-71`：TEST 1（短期记忆恢复）。
-  - `langchain_memory/tests/test_long_term_memory.py: 25-98`：TEST 2（长期记忆跨会话检索）。
-  - `langchain_memory/tests/test_semantic_retrieval.py: 20-61`：TEST 3（语义向量匹配）。
-  - `langchain_memory/tests/test_memory_isolation.py: 24-86`：TEST 4（用户租户隔离）。
-  - `langchain_memory/tests/test_non_memory.py: 25-74`：TEST 5（非记忆即时问题不保存）。
-  - `qa_service/test/test_qa_memory_integration.py: 87-107`：同 thread 追问 query 拼接测试。
-  - `qa_service/test/test_qa_memory_integration.py: 110-119`：runtime query 构建测试。
-  - `qa_service/test/test_qa_memory_integration.py: 121-148`：`prepare -> retrieve -> llm -> record` 顺序测试。
+  - `langchain_memory/tests/test_short_term_memory.py:24`：短期记忆恢复。
+  - `langchain_memory/tests/test_long_term_memory.py:26`：通过 Agent 工具循环检索跨 thread 长期记忆。
+  - `langchain_memory/tests/test_semantic_retrieval.py:21`：语义向量匹配。
+  - `langchain_memory/tests/test_memory_isolation.py:25`：用户 namespace 隔离。
+  - `langchain_memory/tests/test_non_memory.py:26`：非记忆即时问题不保存。
+  - `qa_service/test/test_qa_memory_integration.py`：当前问题不被启发式改写、工具检索隔离和 QA memory 生命周期集成用例。
 
 ---
 
@@ -755,14 +694,14 @@ X-User-Id          -> user_id       -> Store namespace
 X-Conversation-Id  -> thread_id     -> LangGraph Checkpointer
 ```
 
-- **Memory preparation**：`MemoryRuntime.prepare_context()` 在 enterprise vector retrieval 前统一完成短期历史读取、retrieval query 拼接和长期记忆检索。
-- **Short-term memory**：同一个 `thread_id` 由 application-scoped `MemorySaver` 保存消息历史；不同 thread 不共享对话历史。明显追问会拼接最近两个用户问题，独立长问题不会盲目拼接旧问题。
-- **Long-term memory**：`user_id` 映射到 `("users", user_id, "memories")`，通过 runtime 调用 LangGraph Store 的 semantic search。不同用户不会读取彼此的 namespace。
+- **Memory preparation**：`MemoryRuntime.prepare_context()` 只读取短期历史；enterprise vector retrieval 使用当前问题原文，不改写 query。
+- **Short-term memory**：同一个 `thread_id` 由 application-scoped `MemorySaver` 保存消息历史；不同 thread 不共享对话历史。历史作为回答上下文提供，不据此拼接检索 query。
+- **Long-term memory**：最终回答使用的同一个 LLM Agent 绑定 `search_memory`。Agent 自主决定是否调用以及 query；工具只搜索 `("users", user_id, "memories")`，不同用户不会读取彼此的 namespace。
 - **Memory embedding**：默认 `create_memory_store()` 调用 `get_embeddings()`，并使用 `IndexConfig(dims=..., embed=..., fields=["content"])`。写入使用 `store.put(..., index=["content"])`，因此检索不会在 pipeline 中手动计算相似度。
-- **最终 QA context**：现有 KB 文本仍位于 `ENTERPRISE KNOWLEDGE:`；个性化内容位于 `USER MEMORY:`，短期历史位于 `SHORT-TERM CONVERSATION:`。Memory 不是企业知识来源，也不会替代 KB context。
+- **最终 QA context**：KB 文本位于 `ENTERPRISE KNOWLEDGE:`，短期历史位于 `SHORT-TERM CONVERSATION:`。长期记忆不会预先拼入 context，而由 `search_memory` 的 ToolMessage 在同一回答循环中返回。Memory 不是企业知识来源，也不会替代 KB context。
 - **Extraction**：最终 answer 生成后，`MemoryRuntime.record_turn()` 先保存 short-term turn，再使用 `MemoryExtraction` 的 `should_store` 和 `memory` structured output；只有 `should_store=True` 且 memory 非空时才写入 Store。
 - **Failure handling**：memory runtime 初始化、retrieval、extraction 或 write 失败时记录日志并跳过 memory，现有 QA answer 仍返回；系统不会把失败写入报告为成功。
-- **Trace logging**：启用应用 `INFO` 日志后，可按 `memory.*` 过滤完整调用链：`runtime.create` → `prepare.start/done` → `short_term.read` → `query_rewrite` → `retrieve.start/done` → `record.start` → `short_term.append` → `extract.start/done` → `write.done`。
+- **Trace logging**：启用应用 `INFO` 日志后，可按 `memory.*` 过滤调用链：`runtime.create` → `prepare.start/done` → `short_term.read` → `answer_agent.start/done` → `record.start` → `short_term.append` → `extract.start/done` → `write.done`。
 
 API 当前从 header 获取身份：
 
@@ -775,30 +714,25 @@ X-Conversation-Id: conv_456
 
 集成测试位于 `qa_service/test/test_qa_memory_integration.py`，覆盖同 thread 上下文、跨 thread semantic memory、用户隔离、默认 embedding wiring，以及 retrieval/write failure fallback。当前 runtime 使用进程内 `MemorySaver` 和 `InMemoryStore`，重启后数据不会保留；长对话也尚未做摘要或截断。
 
-### 23.1 你这次测试中的两轮追问
+### 23.1 同一 thread 的两轮对话
 
-第一问完成后，`record_turn()` 会把 user/assistant 消息写入 `thread_id` 对应的 Checkpoint。第二问进入 `prepare_context()` 时，runtime 读取该 thread 的历史，并生成：
+第一问完成后，`record_turn()` 会把 user/assistant 消息写入 `thread_id` 对应的 Checkpoint。第二问进入 `prepare_context()` 时，runtime 读取该 thread 的历史。企业 KB 检索只接收当前问题原文；回答 Agent 会在完整上下文中自行判断是否需要记忆工具。
 
-```json
-{
-  "query": "How does the organization recognize customer revenue and allocate transaction prices across deliverables?\n那么托管 API是怎么收入确认的",
-  "top_k": 5
-}
-```
+示例企业 KB 检索参数：`query="那么托管 API是怎么收入确认的"`。长期记忆工具有自己的 query，由回答 Agent 独立生成。
 
-这说明触发的是**短期记忆**，依据是同一个 `thread_id`，不要求 `user_id`。
+短期历史仍由同一个 `thread_id` 恢复，但不会拼接进企业向量检索 query。
 
 ### 23.2 长期记忆如何触发
 
-长期记忆与上面的 query 拼接是两个不同机制：
+长期记忆检索与企业 KB 检索是分开的：
 
 1. 请求带有 `user_id`，例如 API header `X-User-Id: user_123`。
-2. pipeline 拿到 application-scoped `MemoryRuntime`。
-3. `prepare_context()` 调用 `retrieve_user_memories()`，以 `("users", "user_123", "memories")` 为 namespace 做 semantic search。
-4. 搜索 query 是 `retrieval_query`，返回内容放入 `MemoryContext.long_term_memories`，最终进入 `USER MEMORY:` 区块。
-5. 回答结束后，`record_turn()` 调用 structured extraction。只有模型判断当前内容是稳定偏好、长期背景、长期计划或明确要求记住的信息时，才写入 Store。
+2. pipeline 拿到 application-scoped `MemoryRuntime`，先读取短期历史并完成企业知识检索。
+3. 最终回答 Agent 根据上下文自主决定是否调用 `search_memory`，并生成工具 query。
+4. 工具以 `("users", "user_123", "memories")` 为 namespace 做 semantic search，结果作为 ToolMessage 返回同一个 Agent。
+5. 回答结束后，独立的 `record_turn()` 执行 structured extraction。只有模型判断当前内容值得长期保存时，才写入 Store。
 
-因此，单纯问“Hosted API 怎么收入确认”不会自动成为长期记忆；它是企业知识检索问题，通常 `should_store=False`。长期记忆更适合由类似“我喜欢简洁回答，请以后记住”这样的用户信息触发。
+因此，单纯问“Hosted API 怎么收入确认”通常只需要企业知识检索，也不会自动成为长期记忆；用户偏好或明确要求记住的信息才可能触发长期记忆工具和后置写入。
 
 ## 24. 已知限制 (Known Limitations)
 
@@ -820,8 +754,8 @@ X-Conversation-Id: conv_456
 # 26. Completion Report
 
 ### 1. 项目完工说明
-- **本项目 V1 不包含 Evaluation**，已完成全部基础设计与标准单元功能测试。
-- 代码完全符合 Python 3.9 兼容性规则（无 PEP 604 `|` 联合类型，统一使用 `Optional`, `Union`, `List`, `Dict`），并通过 `py_compile` 全量编译校验。
+- **本项目 V1 不包含 Evaluation**。本次 Agent/tool-loop 更新未运行测试。
+- 代码遵守 Python 3.9 兼容性规则（无 PEP 604 `|` 联合类型，使用 `Optional`, `Union`, `List`, `Dict`）。
 
 ### 2. 使用的 LangGraph 核心能力
 - **`StateGraph`**：构建标准图流程，定义清晰的状态转移。
@@ -837,13 +771,7 @@ X-Conversation-Id: conv_456
 - **User Isolation**：通过强制限定命名空间前缀 `("users", user_id, "memories")`，底层物理隔离不同用户的数据。
 
 ### 4. 测试运行结果
-运行了 5 个核心功能测试，全部通过：
-1. `test_same_thread_preserves_conversation_history`: **OK**
-2. `test_store_memory_retrieval_across_threads`: **OK**
-3. `test_semantic_search_finds_relevant_memory`: **OK**
-4. `test_user_b_cannot_access_user_a_memories`: **OK**
-5. `test_transient_question_does_not_create_memory`: **OK**
-*(Ran 5 tests in 0.017s, Status: OK)*
+本节旧版测试结果仅为历史记录，不代表当前 Agent/tool-loop 实现。本次更新未运行测试。
 
 ### 5. API 调整与官方标准对齐说明
 - **LangGraph 0.6+ 节点参数类型检查**：在 LangGraph 0.6+ 中，节点的 `config` 形参如果声明了类型注解，**必须严格标注为 `RunnableConfig`**（不能使用 `Dict[str, Any]`），否则框架内部反射签名匹配时会误将其识别为自定义位置参数导致调用报错。已严格按照当前官方规范采用 `from langchain_core.runnables import RunnableConfig`。

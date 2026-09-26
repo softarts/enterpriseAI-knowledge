@@ -2,25 +2,29 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
-from typing import Any, List, Optional, TypedDict
+from typing import List, Optional, TypedDict
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from typing_extensions import Annotated
 
 try:
     from . import config as app_config
-    from .memory import create_memory_store, extract_and_save_memory, retrieve_user_memories
+    from .graph import build_memory_agent_graph
+    from .memory import create_memory_store, create_search_memory_tool, extract_and_save_memory
     from .prompts import MemoryExtraction
 except ImportError:  # pragma: no cover - supports direct app/ test execution
     from app import config as app_config
-    from app.memory import create_memory_store, extract_and_save_memory, retrieve_user_memories
+    from app.graph import build_memory_agent_graph
+    from app.memory import create_memory_store, create_search_memory_tool, extract_and_save_memory
     from app.prompts import MemoryExtraction
 
 logger = logging.getLogger(__name__)
@@ -36,10 +40,8 @@ class MemoryContext:
 
     retrieval_query: str
     conversation_messages: List[BaseMessage]
-    long_term_memories: List[str]
 
     def format_with_enterprise_context(self, enterprise_context: str) -> str:
-        memory_text = "\n".join(f"- {memory}" for memory in self.long_term_memories)
         history_parts: List[str] = []
         for message in self.conversation_messages:
             message_type = getattr(message, "type", "message")
@@ -49,8 +51,6 @@ class MemoryContext:
                 history_parts.append(f"{role}: {content}")
         history_text = "\n".join(history_parts) or "（当前 thread 尚无历史对话）"
         return (
-            "USER MEMORY:\n"
-            f"{memory_text or '（无相关用户记忆）'}\n\n"
             "SHORT-TERM CONVERSATION:\n"
             f"{history_text}\n\n"
             "ENTERPRISE KNOWLEDGE:\n"
@@ -65,6 +65,8 @@ class MemoryRuntime:
     store: BaseStore
     checkpointer: BaseCheckpointSaver
     conversation_graph: object
+    _answer_llm: Optional[BaseChatModel] = field(default=None, init=False, repr=False)
+    _answer_graph: Optional[CompiledStateGraph] = field(default=None, init=False, repr=False)
 
     def prepare_context(
         self,
@@ -89,47 +91,72 @@ class MemoryRuntime:
             except Exception:
                 logger.warning("Short-term memory retrieval failed", exc_info=True)
 
+        # Enterprise KB retrieval always uses the raw current question: no
+        # string-heuristic query rewriting is applied here.
         retrieval_query = question
-        if thread_id:
-            try:
-                retrieval_query = self.build_retrieval_query(thread_id, question)
-            except Exception:
-                logger.warning(
-                    "Retrieval query rewrite failed; using current question",
-                    exc_info=True,
-                )
-
-        long_term_memories: List[str] = []
-        if user_id:
-            try:
-                long_term_memories = retrieve_user_memories(
-                    store=self.store,
-                    user_id=user_id,
-                    query=retrieval_query,
-                    top_k=top_k,
-                )
-            except Exception:
-                logger.warning("Long-term memory retrieval failed", exc_info=True)
-        else:
-            logger.info(
-                "memory.retrieve.skip reason=no_user_id thread_id=%s; long-term memory is disabled for this request",
-                thread_id,
-            )
 
         context = MemoryContext(
             retrieval_query=retrieval_query,
             conversation_messages=conversation_messages,
-            long_term_memories=long_term_memories,
         )
         logger.info(
-            "memory.prepare.done user_id=%s thread_id=%s short_term_messages=%d long_term_memories=%d query_chars=%d",
+            "memory.prepare.done user_id=%s thread_id=%s short_term_messages=%d query_chars=%d",
             user_id,
             thread_id,
             len(conversation_messages),
-            len(long_term_memories),
             len(retrieval_query),
         )
         return context
+
+    def generate_answer_with_memory(
+        self,
+        llm: BaseChatModel,
+        system_prompt: str,
+        question: str,
+        user_id: str,
+        top_k: int,
+    ) -> str:
+        """Generate the QA answer with `search_memory` in the same agent loop."""
+        logger.info(
+            "memory.answer_agent.start user_id=%s question_chars=%d",
+            user_id,
+            len(question),
+        )
+        if self._answer_graph is None or self._answer_llm is not llm:
+            search_memory_tool = create_search_memory_tool(top_k)
+            self._answer_graph = build_memory_agent_graph(
+                llm=llm,
+                store=self.store,
+                tools=[search_memory_tool],
+            )
+            self._answer_llm = llm
+
+        result = self._answer_graph.invoke(
+            {
+                "messages": [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=question),
+                ]
+            },
+            config={
+                "configurable": {
+                    "user_id": user_id,
+                    "top_k": top_k,
+                }
+            },
+        )
+        final_message = result.get("messages", [])[-1]
+        answer = getattr(final_message, "content", "")
+        if not isinstance(answer, str):
+            answer = "".join(
+                block.get("text", "") for block in answer if isinstance(block, dict)
+            )
+        logger.info(
+            "memory.answer_agent.done user_id=%s answer_chars=%d",
+            user_id,
+            len(answer),
+        )
+        return answer
 
     def record_turn(
         self,
@@ -191,55 +218,6 @@ class MemoryRuntime:
             if content:
                 parts.append(f"{role}: {content}")
         return "\n".join(parts)
-
-    def build_retrieval_query(self, thread_id: str, question: str) -> str:
-        """Build a standalone retrieval query from the current thread history."""
-        config = {"configurable": {"thread_id": thread_id}}
-        state = self.conversation_graph.get_state(config)
-        values = state.values if state else {}
-        messages = list(values.get("messages", []))
-
-        previous_questions: List[str] = []
-        for message in messages[-6:]:
-            if getattr(message, "type", "") != "human":
-                continue
-            content = str(getattr(message, "content", "")).strip()
-            if content:
-                previous_questions.append(content)
-
-        if not previous_questions:
-            logger.info(
-                "memory.query_rewrite.done thread_id=%s previous_questions=0 query_chars=%d",
-                thread_id,
-                len(question),
-            )
-            return question
-
-        normalized_question = " ".join(question.split()).casefold()
-        distinct_previous = []
-        for previous_question in previous_questions:
-            normalized_previous = " ".join(previous_question.split()).casefold()
-            if normalized_previous != normalized_question:
-                distinct_previous.append(previous_question)
-        question_prefix = normalized_question[:40]
-        follow_up_prefixes = ("how about", "what about", "and ", "then ")
-        is_short_follow_up = len(question.split()) <= 8
-        is_prefixed_follow_up = question_prefix.startswith(follow_up_prefixes)
-        selected_questions = (
-            distinct_previous[-2:]
-            if is_short_follow_up or is_prefixed_follow_up
-            else []
-        )
-        retrieval_query = "\n".join(selected_questions + [question])
-        logger.info(
-            "memory.query_rewrite.done thread_id=%s previous_questions=%d selected_questions=%d follow_up=%s query_chars=%d",
-            thread_id,
-            len(previous_questions),
-            len(selected_questions),
-            bool(selected_questions),
-            len(retrieval_query),
-        )
-        return retrieval_query
 
     def get_thread_messages(self, thread_id: str) -> List[BaseMessage]:
         logger.info("memory.short_term.read.start thread_id=%s", thread_id)
@@ -321,3 +299,4 @@ def get_default_memory_runtime() -> MemoryRuntime:
     else:
         logger.debug("memory.runtime.default.reuse")
     return _default_runtime
+

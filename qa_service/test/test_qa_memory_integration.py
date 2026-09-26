@@ -10,11 +10,23 @@ from langchain_memory.app.memory import create_memory_store, save_user_memory
 from langchain_memory.app.prompts import MemoryExtraction
 from langchain_memory.app.runtime import create_memory_runtime
 from langchain_memory import MemoryContext
-from langchain_memory.tests.test_helpers import KeywordBagEmbeddings
+from langchain_memory.tests.test_helpers import DeterministicMockChatModel, KeywordBagEmbeddings
 from chat_service.api.routes_ask import ask
 from chat_service.services.qa.models import AskRequest
 from qa_service import pipeline
 from qa_service.models import RetrievedChunk
+
+
+def _always_search_memory(messages: Any) -> Any:
+    """Deterministic retrieval-agent stub: always call search_memory with the
+    latest human message as query, mirroring an LLM that decides to search
+    whenever the question could depend on user history."""
+    last_human = next(
+        (m for m in reversed(messages) if getattr(m, "type", "") == "human"),
+        None,
+    )
+    query = str(getattr(last_human, "content", "")) if last_human else ""
+    return {"name": "search_memory", "args": {"query": query}}
 
 
 class ExtractionModel:
@@ -41,10 +53,20 @@ def _runtime() -> Any:
         embeddings=KeywordBagEmbeddings(),
         dims=len(KeywordBagEmbeddings.KEYWORDS),
     )
-    return create_memory_runtime(store=store, checkpointer=MemorySaver())
+    runtime = create_memory_runtime(store=store, checkpointer=MemorySaver())
+    runtime.test_llm = DeterministicMockChatModel(
+        response_generator=lambda messages: "\n".join(
+            str(getattr(message, "content", ""))
+            for message in messages
+            if getattr(message, "type", "") in {"system", "tool"}
+        ),
+        tool_call_rule=_always_search_memory,
+    )
+    return runtime
 
 
-def _chunk() -> RetrievedChunk:
+
+        ), patch.object(pipeline.config, "is_reflection_enabled", return_value=True), patch.object(
     return RetrievedChunk(
         chunk_id="chunk-1",
         document_id="doc-1",
@@ -62,6 +84,8 @@ def _run_answer(question: str, runtime: Any, user_id: str, thread_id: str) -> st
         pipeline.retrieval, "is_confident", return_value=True
     ), patch.object(pipeline.config, "is_reflection_enabled", return_value=False), patch.object(
         pipeline.llm_client, "generate", side_effect=lambda system, context, query: context
+    ), patch.object(
+        pipeline.llm_client, "get_llm", return_value=runtime.test_llm
     ), patch(
         "langchain_memory.app.config.get_chat_model",
         return_value=ExtractionModel(MemoryExtraction(should_store=False, memory=None)),
@@ -84,7 +108,9 @@ class TestQAMemoryIntegration(unittest.TestCase):
         self.assertIn("用户: 我的名字是 Alice。", answer)
         self.assertIn("ENTERPRISE KNOWLEDGE:", answer)
 
-    def test_same_thread_follow_up_uses_recent_user_turn_for_retrieval(self) -> None:
+    def test_follow_up_question_is_not_naively_concatenated_for_retrieval(self) -> None:
+        """Enterprise KB retrieval now always uses the raw current question;
+        no more string-heuristic query rewriting based on prior turns."""
         runtime = _runtime()
         _run_answer("How does the organization recognize revenue?", runtime, "user-a", "thread-a")
 
@@ -92,6 +118,8 @@ class TestQAMemoryIntegration(unittest.TestCase):
             pipeline.retrieval, "is_confident", return_value=True
         ), patch.object(pipeline.config, "is_reflection_enabled", return_value=False), patch.object(
             pipeline.llm_client, "generate", return_value="正常答案"
+        ), patch.object(
+            pipeline.llm_client, "get_llm", return_value=runtime.test_llm
         ), patch(
             "langchain_memory.app.config.get_chat_model",
             return_value=ExtractionModel(MemoryExtraction(should_store=False, memory=None)),
@@ -104,29 +132,8 @@ class TestQAMemoryIntegration(unittest.TestCase):
             )
 
         retrieval_query = retrieve.call_args.args[0]
-        self.assertIn("How does the organization recognize revenue?", retrieval_query)
-        self.assertIn("How about Hosted API scenario?", retrieval_query)
-
-    def test_runtime_builds_standalone_retrieval_query(self) -> None:
-        runtime = _runtime()
-        _run_answer("How does the organization recognize revenue?", runtime, "user-a", "thread-a")
-
-        query = runtime.build_retrieval_query("thread-a", "How about Hosted API scenario?")
-
-        self.assertEqual(
-            query,
-            "How does the organization recognize revenue?\nHow about Hosted API scenario?",
-        )
-
-    def test_repeated_question_is_not_added_twice_to_retrieval_query(self) -> None:
-        runtime = _runtime()
-        _run_answer("How does the organization recognize revenue?", runtime, "user-a", "thread-a")
-
-        query = runtime.build_retrieval_query(
-            "thread-a", "How does the organization recognize revenue?"
-        )
-
-        self.assertEqual(query, "How does the organization recognize revenue?")
+        self.assertEqual(retrieval_query, "How about Hosted API scenario?")
+        self.assertNotIn("How does the organization recognize revenue?", retrieval_query)
 
     def test_memory_lifecycle_wraps_enterprise_qa_flow(self) -> None:
         events = []
@@ -136,10 +143,12 @@ class TestQAMemoryIntegration(unittest.TestCase):
             or MemoryContext(
                 retrieval_query=kwargs["question"],
                 conversation_messages=[],
-                long_term_memories=[],
             )
         )
         runtime.record_turn.side_effect = lambda **kwargs: events.append("record")
+        runtime.generate_answer_with_memory.side_effect = (
+            lambda **kwargs: events.append("llm") or "答案"
+        )
 
         with patch.object(
             pipeline.retrieval,
@@ -151,6 +160,10 @@ class TestQAMemoryIntegration(unittest.TestCase):
             pipeline.llm_client,
             "generate",
             side_effect=lambda *args, **kwargs: (events.append("llm") or "答案"),
+        ), patch.object(
+            pipeline.llm_client,
+            "get_llm",
+            return_value=DeterministicMockChatModel(),
         ):
             result = pipeline.answer_question(
                 "问题",
@@ -174,7 +187,7 @@ class TestQAMemoryIntegration(unittest.TestCase):
         answer = _run_answer("以后回答能不能简单一点？", runtime, "user-a", "thread-b")
 
         self.assertIn("用户喜欢安静的餐厅。", answer)
-        self.assertIn("USER MEMORY:", answer)
+        self.assertNotIn("USER MEMORY:", answer)
 
     def test_memory_is_isolated_by_user_id(self) -> None:
         runtime = _runtime()
@@ -186,17 +199,22 @@ class TestQAMemoryIntegration(unittest.TestCase):
 
     def test_memory_retrieval_failure_does_not_break_qa(self) -> None:
         runtime = _runtime()
-        with patch("langchain_memory.app.runtime.retrieve_user_memories", side_effect=RuntimeError("store unavailable")):
+        # retrieve_user_memories is now only called from inside the
+        # search_memory tool (app/memory.py), not directly from runtime.py.
+        with patch("langchain_memory.app.memory.retrieve_user_memories", side_effect=RuntimeError("store unavailable")):
             answer = _run_answer("普通问题", runtime, "user-a", "thread-a")
 
         self.assertIn("ENTERPRISE KNOWLEDGE:", answer)
 
     def test_memory_write_failure_does_not_break_qa(self) -> None:
         runtime = _runtime()
+        runtime.test_llm.response_generator = lambda messages: "正常答案"
         extraction = ExtractionModel(
             MemoryExtraction(should_store=True, memory="用户喜欢简洁回答。")
         )
         with patch("langchain_memory.app.config.get_chat_model", return_value=extraction), patch.object(
+            pipeline.llm_client, "get_llm", return_value=runtime.test_llm
+        ), patch.object(
             pipeline.retrieval, "retrieve", return_value=[_chunk()]
         ), patch.object(pipeline.retrieval, "is_confident", return_value=True), patch.object(
             pipeline.config, "is_reflection_enabled", return_value=False

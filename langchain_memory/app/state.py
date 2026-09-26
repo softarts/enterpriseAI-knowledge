@@ -13,10 +13,12 @@ class MemoryGraphState(TypedDict):
     """
     State schema for the conversational memory graph.
 
-    - messages: Thread-level short-term conversation history, managed via add_messages reducer.
-    - retrieved_memories: User-level long-term memories retrieved from LangGraph Store for the current turn.
+    - messages: Thread-level short-term conversation history, managed via
+      add_messages reducer. Long-term memory search results are ToolMessage
+      entries produced by the `search_memory` tool inside this same list; the
+      LLM decides whether/when they are needed, so no separate
+      `retrieved_memories` field is kept in state.
     """
 
     messages: Annotated[List[BaseMessage], add_messages]
-    retrieved_memories: List[str]
 

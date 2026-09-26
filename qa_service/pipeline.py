@@ -70,7 +70,6 @@ def answer_question(
         memory_context = MemoryContext(
             retrieval_query=question,
             conversation_messages=[],
-            long_term_memories=[],
         )
 
     trace = TraceBuilder()
@@ -82,7 +81,6 @@ def answer_question(
             "thread_id_present": bool(thread_id),
             "store_type": type(memory_runtime.store).__name__ if memory_runtime is not None else None,
             "retrieval_query": memory_context.retrieval_query,
-            "user_memories": len(memory_context.long_term_memories),
             "short_term_messages": len(memory_context.conversation_messages),
         },
         status="ok" if memory_runtime is not None else "skipped",
@@ -165,7 +163,6 @@ def answer_question(
             "memory_enabled": memory_runtime is not None,
             "user_id_present": bool(user_id),
             "thread_id_present": bool(thread_id),
-            "user_memories": len(memory_context.long_term_memories),
             "short_term_messages": len(memory_context.conversation_messages),
         },
     )
@@ -175,7 +172,23 @@ def answer_question(
 
     # Step 5: 调用 LLM
     llm_started = time.perf_counter()
-    draft_answer = llm_client.generate(system_prompt, context, question)
+    if memory_runtime is not None and user_id:
+        try:
+            draft_answer = memory_runtime.generate_answer_with_memory(
+                llm=llm_client.get_llm(),
+                system_prompt=system_prompt,
+                question=question,
+                user_id=user_id,
+                top_k=config.TOP_K,
+            )
+        except Exception:
+            logger.warning(
+                "Memory-enabled answer agent failed; falling back to plain generation",
+                exc_info=True,
+            )
+            draft_answer = llm_client.generate(system_prompt, context, question)
+    else:
+        draft_answer = llm_client.generate(system_prompt, context, question)
     trace.add_step(
         "llm",
         {

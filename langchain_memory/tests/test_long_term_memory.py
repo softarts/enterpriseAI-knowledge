@@ -26,7 +26,7 @@ class TestLongTermMemory(unittest.TestCase):
     def test_store_memory_retrieval_across_threads(self):
         """
         Verify that a long-term memory saved in Thread A is retrievable in Thread B
-        for the same user_id.
+        for the same user_id, once the LLM decides to call `search_memory`.
         """
         embedder = KeywordBagEmbeddings()
         store = create_memory_store(
@@ -34,21 +34,37 @@ class TestLongTermMemory(unittest.TestCase):
             dims=len(KeywordBagEmbeddings.KEYWORDS),
         )
 
+        def mock_tool_call_rule(messages):
+            # The LLM only decides to search memory for a recommendation
+            # question, not for a plain preference statement.
+            last_human = next(
+                (m for m in reversed(messages) if getattr(m, "type", "") == "human"),
+                None,
+            )
+            if last_human and "适合我" in str(last_human.content):
+                return {"name": "search_memory", "args": {"query": "餐厅偏好"}}
+            return None
+
         def mock_llm_response(messages):
-            # Inspect system prompt to verify retrieved long-term memories were passed
-            system_msg = messages[0].content
-            if "安静的餐厅" in system_msg:
+            # Inspect the ToolMessage produced by search_memory (if any) to
+            # verify retrieved long-term memories were passed back to the LLM.
+            tool_message = next(
+                (m for m in reversed(messages) if getattr(m, "type", "") == "tool"),
+                None,
+            )
+            tool_text = str(getattr(tool_message, "content", "")) if tool_message else ""
+            if "安静的餐厅" in tool_text:
                 return "根据你的偏好，我推荐安静舒适的日式料理或私房菜餐厅。"
             return "收到你的餐厅偏好。"
 
-        def mock_extraction(user_text):
-            if "安静" in user_text and "餐厅" in user_text:
-                return MemoryExtraction(should_store=True, memory="用户喜欢安静的餐厅。")
-            return MemoryExtraction(should_store=False, memory=None)
-
         mock_llm = DeterministicMockChatModel(
             response_generator=mock_llm_response,
-            extraction_rule=mock_extraction,
+            tool_call_rule=mock_tool_call_rule,
+            extraction_rule=lambda user_text: (
+                MemoryExtraction(should_store=True, memory="用户喜欢安静的餐厅。")
+                if "安静" in user_text and "餐厅" in user_text
+                else MemoryExtraction(should_store=False, memory=None)
+            ),
         )
 
         checkpointer = MemorySaver()
@@ -58,7 +74,7 @@ class TestLongTermMemory(unittest.TestCase):
             store=store,
         )
 
-        # Thread A: User shares preference
+        # Thread A: User shares preference (no reason for the LLM to search memory here)
         config_thread_a = {
             "configurable": {
                 "thread_id": "thread_A",
@@ -89,13 +105,16 @@ class TestLongTermMemory(unittest.TestCase):
             config=config_thread_b,
         )
 
-        # In Thread B, short-term history only has 2 messages (no Thread A messages)
-        self.assertEqual(len(turn_b["messages"]), 2)
-        # But retrieved_memories in graph state contains the long-term memory!
-        self.assertIn("用户喜欢安静的餐厅。", turn_b["retrieved_memories"])
-        # And the assistant's answer reflects this retrieved background
+        # In Thread B this turn adds 4 messages: Human, AI(tool_call), Tool(result), AI(final)
+        self.assertEqual(len(turn_b["messages"]), 4)
+        tool_messages = [m for m in turn_b["messages"] if getattr(m, "type", "") == "tool"]
+        self.assertEqual(len(tool_messages), 1)
+        # The LLM decided to call search_memory, which found the long-term memory!
+        self.assertIn("用户喜欢安静的餐厅。", tool_messages[0].content)
+        # And the assistant's final answer reflects this retrieved background
         self.assertIn("安静舒适", turn_b["messages"][-1].content)
 
 
 if __name__ == "__main__":
     unittest.main()
+

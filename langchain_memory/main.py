@@ -8,6 +8,16 @@ from langchain_core.messages import HumanMessage
 from app.graph import build_memory_graph
 
 
+def _search_memory_results(turn: dict) -> list:
+    """Pull out the `search_memory` tool results the agent chose to request."""
+    return [
+        message.content
+        for message in turn.get("messages", [])
+        if getattr(message, "type", "") == "tool" and getattr(message, "name", None) == "search_memory"
+    ]
+
+
+
 def run_demo() -> None:
     print("=" * 60)
     print("LangGraph Memory MVP V1 Demo")
@@ -59,7 +69,7 @@ def run_demo() -> None:
     )
     print(f"Alice (Thread 2): 周末聚餐，你觉得什么样的餐厅适合我？")
     print(f"Assistant: {turn4['messages'][-1].content}")
-    print(f"Retrieved Long-term Memories in Thread 2: {turn4.get('retrieved_memories', [])}\n")
+    print(f"search_memory tool results in Thread 2: {_search_memory_results(turn4)}\n")
 
     # Demonstration 3: User isolation (different user)
     print("\n--- 3. User Isolation (Different user_id) ---")
@@ -75,7 +85,7 @@ def run_demo() -> None:
     )
     print(f"Bob: 你觉得什么样的餐厅适合我？")
     print(f"Assistant: {turn5['messages'][-1].content}")
-    print(f"Retrieved Long-term Memories for Bob: {turn5.get('retrieved_memories', [])}\n")
+    print(f"search_memory tool results for Bob: {_search_memory_results(turn5)}\n")
 
 
 if __name__ == "__main__":
