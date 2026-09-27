@@ -30,8 +30,18 @@ class ChatService:
     def __init__(self, memory_runtime: MemoryRuntime) -> None:
         self._memory_runtime = memory_runtime
 
-    def ask(self, question: str, thread_id: str) -> ChatResult:
-        """Generate a chat answer using history checkpointed under ``thread_id``."""
+    def ask(
+        self,
+        question: str,
+        thread_id: str,
+        user_id: Optional[str] = None,
+    ) -> ChatResult:
+        """Generate a chat answer using history checkpointed under ``thread_id``.
+
+        Short-term history is restored by the Checkpointer; long-term memory
+        is searched only when the agent decides to call its search tool, and
+        written by the graph's update_memory node after the final answer.
+        """
         trace = TraceBuilder()
         question = (question or "").strip()
         model_config = llm_client.get_model_config()
@@ -45,6 +55,7 @@ class ChatService:
                 "question": question,
                 "question_chars": len(question),
                 "thread_id_present": bool(thread_id),
+                "user_id_present": bool(user_id),
                 "checkpoint_messages_before": len(memory_context.conversation_messages),
                 "model": model_config["model"],
                 "max_tokens": model_config["max_tokens"],
@@ -77,6 +88,7 @@ class ChatService:
                 system_prompt="",
                 question=question,
                 thread_id=thread_id,
+                user_id=user_id,
             )
         except Exception as exc:  # noqa: BLE001 - return provider/config errors to UI
             duration_ms = (time.perf_counter() - started) * 1000

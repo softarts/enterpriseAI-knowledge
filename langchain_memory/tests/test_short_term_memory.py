@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.graph import build_memory_agent_graph
-from test_helpers import DeterministicMockChatModel
+from test_helpers import DeterministicMockChatModel, create_test_store
 
 
 class TestShortTermMemory(unittest.TestCase):
@@ -33,8 +33,9 @@ class TestShortTermMemory(unittest.TestCase):
         graph = build_memory_agent_graph(
             llm=DeterministicMockChatModel(response_generator=mock_llm_response),
             checkpointer=MemorySaver(),
+            store=create_test_store(),
         )
-        thread_config = {"configurable": {"thread_id": "thread_A"}}
+        thread_config = {"configurable": {"thread_id": "thread_A", "user_id": "user_test"}}
 
         first_turn = graph.invoke(
             {"messages": [HumanMessage(content="我的名字是 Alice。")]},
@@ -58,15 +59,16 @@ class TestShortTermMemory(unittest.TestCase):
         graph = build_memory_agent_graph(
             llm=DeterministicMockChatModel(default_response="回复"),
             checkpointer=MemorySaver(),
+            store=create_test_store(),
         )
         graph.invoke(
             {"messages": [HumanMessage(content="仅在 A 的内容")]},
-            config={"configurable": {"thread_id": "thread_A"}},
+            config={"configurable": {"thread_id": "thread_A", "user_id": "user_test"}},
         )
 
         thread_b_state = graph.invoke(
             {"messages": [HumanMessage(content="B 的新对话")]},
-            config={"configurable": {"thread_id": "thread_B"}},
+            config={"configurable": {"thread_id": "thread_B", "user_id": "user_test"}},
         )
 
         self.assertEqual(len(thread_b_state["messages"]), 2)

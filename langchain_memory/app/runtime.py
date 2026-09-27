@@ -1,24 +1,29 @@
-"""Reusable LangGraph runtime for Checkpointer-backed short-term memory."""
+"""Reusable LangGraph runtime: Checkpointer short-term + Store long-term memory."""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.store.base import BaseStore
 
 try:
     from . import config as app_config
     from .graph import build_memory_agent_graph
+    from .long_memory import create_memory_store
 except ImportError:  # pragma: no cover - supports direct app/ test execution
     from app import config as app_config
     from app.graph import build_memory_agent_graph
+    from app.long_memory import create_memory_store
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_USER_ID = "default-user"
 
 
 @dataclass
@@ -34,9 +39,20 @@ class MemoryContext:
 
 @dataclass
 class MemoryRuntime:
-    """Application-scoped Checkpointer for short-term conversation state."""
+    """Application-scoped Checkpointer (short-term) + Store (long-term).
+
+    The store is created lazily on first use so that importing the runtime
+    never loads the embedding model; inject a store for tests.
+    """
 
     checkpointer: BaseCheckpointSaver
+    store: Optional[BaseStore] = field(default=None)
+
+    def get_store(self) -> BaseStore:
+        if self.store is None:
+            logger.info("memory.runtime.store.lazy_create")
+            self.store = create_memory_store()
+        return self.store
 
     def prepare_context(self, thread_id: Optional[str], question: str) -> MemoryContext:
         """Read prior messages for this thread; do not mutate checkpoint state."""
@@ -78,17 +94,31 @@ class MemoryRuntime:
         system_prompt: str,
         question: str,
         thread_id: str,
+        user_id: Optional[str] = None,
+        top_k: Optional[int] = None,
     ) -> str:
-        """Generate an answer and let the graph checkpoint messages by thread."""
+        """Generate an answer and let the graph checkpoint messages by thread.
+
+        Short-term history is restored by the bound Checkpointer; long-term
+        memory is searched only if the agent calls the search_memory tool and
+        is written by the update_memory node after the final answer.
+        """
+        active_user_id = user_id or DEFAULT_USER_ID
+        active_top_k = top_k or app_config.MEMORY_TOP_K
+        store = self.get_store()
         logger.info(
-            "memory.graph.build thread_id=%s checkpointer=%s",
+            "memory.graph.build thread_id=%s user_id=%s checkpointer=%s store=%s top_k=%d",
             thread_id,
+            active_user_id,
             type(self.checkpointer).__name__,
+            type(store).__name__,
+            active_top_k,
         )
         answer_graph = build_memory_agent_graph(
             llm=llm,
             checkpointer=self.checkpointer,
             system_prompt=system_prompt,
+            store=store,
         )
         logger.info(
             "memory.graph.invoke.start thread_id=%s input_message_count=1",
@@ -96,7 +126,13 @@ class MemoryRuntime:
         )
         result = answer_graph.invoke(
             {"messages": [HumanMessage(content=question)]},
-            config={"configurable": {"thread_id": thread_id}},
+            config={
+                "configurable": {
+                    "thread_id": thread_id,
+                    "user_id": active_user_id,
+                    "top_k": active_top_k,
+                }
+            },
         )
         result_messages = result.get("messages", [])
         final_message = result_messages[-1]
@@ -116,14 +152,16 @@ class MemoryRuntime:
 
 def create_memory_runtime(
     checkpointer: Optional[BaseCheckpointSaver] = None,
+    store: Optional[BaseStore] = None,
 ) -> MemoryRuntime:
-    """Create an application-scoped short-term memory runtime."""
+    """Create an application-scoped short-term + long-term memory runtime."""
     active_checkpointer = checkpointer if checkpointer is not None else MemorySaver()
     logger.info(
-        "memory.runtime.create checkpointer=%s",
+        "memory.runtime.create checkpointer=%s store=%s",
         type(active_checkpointer).__name__,
+        type(store).__name__ if store is not None else "lazy",
     )
-    return MemoryRuntime(checkpointer=active_checkpointer)
+    return MemoryRuntime(checkpointer=active_checkpointer, store=store)
 
 
 _default_runtime: Optional[MemoryRuntime] = None

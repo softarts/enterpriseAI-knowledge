@@ -1,10 +1,11 @@
-"""Chat model configuration for the short-term memory graph."""
+"""Chat model and memory-embedding configuration for the memory graph."""
 
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import List, Optional
 
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
@@ -15,6 +16,45 @@ OPENAI_BASE_URL: Optional[str] = (
 MODEL_NAME: str = (
     os.environ.get("MODEL_NAME") or os.environ.get("LLM_MODEL") or "gpt-4o-mini"
 )
+
+# Long-term memory store index configuration.
+MEMORY_EMBEDDING_MODEL: str = os.environ.get("MEMORY_EMBEDDING_MODEL") or "bge_m3"
+MEMORY_EMBEDDING_DIMS: int = int(os.environ.get("MEMORY_EMBEDDING_DIMS") or "1024")
+MEMORY_TOP_K: int = int(os.environ.get("MEMORY_TOP_K") or "3")
+
+# Local alias -> HuggingFace model name, aligned with
+# embedding_service/models_registry.py so the memory index and the enterprise KB
+# use the same embedding space.
+_EMBEDDING_MODEL_REGISTRY = {
+    "bge_m3": "BAAI/bge-m3",
+}
+
+
+class SentenceTransformerEmbeddings(Embeddings):
+    """Minimal langchain-core Embeddings wrapper around sentence-transformers."""
+
+    def __init__(self, model_name: str, normalize_embeddings: bool = True) -> None:
+        from sentence_transformers import SentenceTransformer  # lazy heavy import
+
+        self._model = SentenceTransformer(model_name)
+        self._normalize = normalize_embeddings
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self._model.encode(
+            list(texts), normalize_embeddings=self._normalize
+        ).tolist()
+
+    def embed_query(self, text: str) -> List[float]:
+        return self._model.encode(
+            [text], normalize_embeddings=self._normalize
+        )[0].tolist()
+
+
+def get_embeddings(model_name: Optional[str] = None) -> Embeddings:
+    """Create the embeddings used by the long-term memory store index."""
+    alias = model_name or MEMORY_EMBEDDING_MODEL
+    resolved = _EMBEDDING_MODEL_REGISTRY.get(alias, alias)
+    return SentenceTransformerEmbeddings(model_name=resolved)
 
 
 def get_chat_model(
