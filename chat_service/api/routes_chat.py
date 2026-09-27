@@ -6,38 +6,45 @@ Endpoints:
     POST /api/chat    - single-turn Ask; returns answer + extensible trace.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 
 from chat_service.services.chat.config import settings
 from chat_service.services.chat.models import ChatRequest, ChatResponse
 from chat_service.services.chat.chat_service import ChatService
+from langchain_memory.app.runtime import create_memory_runtime
+from qa_service import config as qa_config
 
 router = APIRouter()
 
-# One shared service instance (stateless; safe to reuse).
-_chat_service = ChatService()
+# Process-scoped Checkpointer runtime; it exists before requests are served.
+_memory_runtime = create_memory_runtime()
+_chat_service = ChatService(memory_runtime=_memory_runtime)
 
 
 @router.get("/api/health")
 def health() -> dict:
-    """Report service status and whether an HF token is configured."""
+    """Report service status and whether the shared LLM config is complete."""
     return {
         "service": settings.service_name,
         "version": settings.version,
-        "model": settings.model,
-        # Booleans only — never return the token value itself.
-        "hf_token_configured": bool(settings.hf_token()),
+        "model": qa_config.LLM_MODEL,
+        "llm_configured": bool(
+            qa_config.LLM_API_KEY and qa_config.LLM_BASE_URL and qa_config.LLM_MODEL
+        ),
     }
 
 
 @router.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(
+    request: ChatRequest,
+    conversation_id: str = Header(alias="X-Conversation-Id"),
+) -> ChatResponse:
     """
-    Run the Ask flow: question -> HF LLM -> answer + trace.
+    Run pure chat with Checkpointer history scoped to X-Conversation-Id.
 
     Errors (missing token, upstream failure, empty question) are returned as a
     200 response with `error` set and an error-annotated trace, so the UI can
     render them in the chat area and the Verbose panel.
     """
-    result = _chat_service.ask(request.question)
+    result = _chat_service.ask(request.question, thread_id=conversation_id)
     return ChatResponse(answer=result.answer, trace=result.trace, error=result.error)

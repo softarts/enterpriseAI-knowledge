@@ -1,4 +1,4 @@
-"""TEST 1: Short-term memory verification via LangGraph State + Checkpointer."""
+"""Short-term memory verification via LangGraph Checkpointer."""
 
 from __future__ import annotations
 
@@ -16,58 +16,61 @@ if _current_dir not in sys.path:
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from app.graph import build_memory_graph
+from app.graph import build_memory_agent_graph
 from test_helpers import DeterministicMockChatModel
 
 
 class TestShortTermMemory(unittest.TestCase):
-    def test_same_thread_preserves_conversation_history(self):
-        """
-        Verify that within the same thread_id, the Checkpointer restores
-        previous conversation state across turns.
-        """
-
+    def test_same_thread_preserves_conversation_history(self) -> None:
         def mock_llm_response(messages):
-            # If previous message history contains Alice, answer Alice
             full_context = " ".join(
-                str(m.content) for m in messages if hasattr(m, "content")
+                str(message.content) for message in messages if hasattr(message, "content")
             )
             if "Alice" in full_context and "叫什么名字" in messages[-1].content:
                 return "你叫 Alice。"
             return "收到你的信息。"
 
-        mock_llm = DeterministicMockChatModel(response_generator=mock_llm_response)
-        checkpointer = MemorySaver()
-        graph = build_memory_graph(llm=mock_llm, checkpointer=checkpointer)
+        graph = build_memory_agent_graph(
+            llm=DeterministicMockChatModel(response_generator=mock_llm_response),
+            checkpointer=MemorySaver(),
+        )
+        thread_config = {"configurable": {"thread_id": "thread_A"}}
 
-        thread_config = {
-            "configurable": {
-                "thread_id": "thread_A",
-                "user_id": "user_A",
-            }
-        }
-
-        # Turn 1: User introduces name
-        turn1 = graph.invoke(
+        first_turn = graph.invoke(
             {"messages": [HumanMessage(content="我的名字是 Alice。")]},
             config=thread_config,
         )
-        self.assertEqual(len(turn1["messages"]), 2)
-        self.assertEqual(turn1["messages"][0].content, "我的名字是 Alice。")
-        self.assertEqual(turn1["messages"][1].content, "收到你的信息。")
-
-        # Turn 2: User asks for name in the same thread
-        turn2 = graph.invoke(
+        second_turn = graph.invoke(
             {"messages": [HumanMessage(content="我叫什么名字？")]},
             config=thread_config,
         )
 
-        # Check that state history accumulated to 4 messages (2 human + 2 AI)
-        self.assertEqual(len(turn2["messages"]), 4)
-        self.assertEqual(turn2["messages"][0].content, "我的名字是 Alice。")
-        self.assertEqual(turn2["messages"][2].content, "我叫什么名字？")
-        # Check that assistant answered using previous conversation history
-        self.assertIn("Alice", turn2["messages"][-1].content)
+        self.assertEqual(len(first_turn["messages"]), 2)
+        self.assertEqual(len(second_turn["messages"]), 4)
+        self.assertEqual(second_turn["messages"][0].content, "我的名字是 Alice。")
+        self.assertEqual(second_turn["messages"][2].content, "我叫什么名字？")
+        self.assertIn("Alice", second_turn["messages"][-1].content)
+        self.assertTrue(
+            all(message.type != "system" for message in second_turn["messages"])
+        )
+
+    def test_different_threads_do_not_share_history(self) -> None:
+        graph = build_memory_agent_graph(
+            llm=DeterministicMockChatModel(default_response="回复"),
+            checkpointer=MemorySaver(),
+        )
+        graph.invoke(
+            {"messages": [HumanMessage(content="仅在 A 的内容")]},
+            config={"configurable": {"thread_id": "thread_A"}},
+        )
+
+        thread_b_state = graph.invoke(
+            {"messages": [HumanMessage(content="B 的新对话")]},
+            config={"configurable": {"thread_id": "thread_B"}},
+        )
+
+        self.assertEqual(len(thread_b_state["messages"]), 2)
+        self.assertEqual(thread_b_state["messages"][0].content, "B 的新对话")
 
 
 if __name__ == "__main__":

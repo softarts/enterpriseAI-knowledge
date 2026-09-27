@@ -1,1 +1,1 @@
-"""Legacy direct-chat service, retained while /api/chat is being retired."""
+"""Pure-chat service with Checkpointer-backed short-term conversation history."""

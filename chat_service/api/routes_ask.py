@@ -5,8 +5,8 @@ Endpoints:
     POST /api/ask  - 单次检索 + 生成的问答接口；返回答案、来源 chunk_id、Reflection 状态。
 
 与 /api/chat 的区别：
-    /api/chat  → ChatService → HF LLM 直接对话（无 RAG）
-    /api/ask   → services.qa → qa_service.pipeline → 检索 + LangChain LCEL → 带来源的答案
+    /api/chat  → ChatService → Checkpointer 短期记忆 + 共享 LLM 配置（无 RAG）
+    /api/ask   → services.qa → qa_service.pipeline → 检索 + 可选 thread Checkpointer → 带来源的答案
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ router = APIRouter()
 @router.post("/api/ask", response_model=AskResponse)
 def ask(
     request: AskRequest,
-    user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
     conversation_id: Optional[str] = Header(default=None, alias="X-Conversation-Id"),
 ) -> AskResponse:
     """
@@ -39,7 +38,7 @@ def ask(
 
     流程：
         question → embedding → ChromaDB Top-K → 置信度判断
-        → context 组装 → LangChain LCEL (ChatOpenAI) → Reflection（占位）
+        → 企业知识 context → LangGraph Checkpointer agent（有 conversation_id 时）→ Reflection
         → AskResponse
 
     错误以 200 响应返回（error 字段非 null），方便前端在 Ask 面板内渲染。
@@ -47,7 +46,6 @@ def ask(
     try:
         result = answer_question(
             request.question,
-            user_id=user_id,
             thread_id=conversation_id,
         )
         return AskResponse(

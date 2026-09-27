@@ -2,6 +2,18 @@
 // The browser only ever calls chat_service — never Hugging Face directly.
 
 const CHAT_ENDPOINT = "/api/chat";
+const CONVERSATION_ID_KEY = "enterprise-ai-chat-conversation-id";
+
+function getConversationId() {
+  let conversationId = window.sessionStorage.getItem(CONVERSATION_ID_KEY);
+  if (!conversationId) {
+    conversationId = typeof crypto !== "undefined" && crypto.randomUUID
+      ? `conversation-${crypto.randomUUID()}`
+      : `conversation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    window.sessionStorage.setItem(CONVERSATION_ID_KEY, conversationId);
+  }
+  return conversationId;
+}
 
 /**
  * Send a question to the backend Ask flow.
@@ -11,7 +23,10 @@ const CHAT_ENDPOINT = "/api/chat";
 export async function askQuestion(question) {
   const res = await fetch(CHAT_ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Conversation-Id": getConversationId(),
+    },
     body: JSON.stringify({ question }),
   });
 

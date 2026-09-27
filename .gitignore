@@ -32,3 +32,5 @@ chat_service/import_data/
 import_data/**
 *.db
 llmclient.py
+*.sh
+*.txt

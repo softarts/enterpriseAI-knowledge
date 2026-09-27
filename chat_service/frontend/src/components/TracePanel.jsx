@@ -133,6 +133,8 @@ function StepRow({ step }) {
 // ─── Trace Panel ─────────────────────────────────────────────────────────────
 export default function TracePanel({ collapsed, onToggle, trace, onDividerMouseDown }) {
   const steps = trace?.steps || [];
+  const currentQuestion = trace?.request?.question;
+  const currentAnswer = trace?.response?.answer;
 
   return (
     <aside className={`tracepanel ${collapsed ? "tracepanel--collapsed" : ""}`}>
@@ -182,6 +184,24 @@ export default function TracePanel({ collapsed, onToggle, trace, onDividerMouseD
                   <span className="tracepanel__v">{steps.length}</span>
                 </div>
               </div>
+
+              {(currentQuestion || currentAnswer) && (
+                <section className="trace-turn" aria-label="Current conversation turn">
+                  <div className="trace-turn__title">Current Turn</div>
+                  {currentQuestion && (
+                    <div className="trace-turn__item">
+                      <div className="trace-turn__label">You</div>
+                      <pre className="trace-turn__text">{currentQuestion}</pre>
+                    </div>
+                  )}
+                  {currentAnswer && (
+                    <div className="trace-turn__item">
+                      <div className="trace-turn__label">Assistant</div>
+                      <pre className="trace-turn__text">{currentAnswer}</pre>
+                    </div>
+                  )}
+                </section>
+              )}
 
               <div className="tracepanel__steps">
                 {steps.map((s, i) => (

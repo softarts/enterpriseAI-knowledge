@@ -19,7 +19,8 @@ app = FastAPI(
     title="Enterprise AI Playground — chat_service",
     description=(
         "Standalone backend for the Enterprise AI Playground UI. "
-        "Chat: direct HF LLM. Ask: RAG pipeline (qa_service, LangChain + ChromaDB)."
+        "Chat: Checkpointer-backed conversation using shared LLM config. "
+        "Ask: RAG pipeline (qa_service, LangChain + ChromaDB)."
     ),
     version=settings.version,
 )

@@ -848,6 +848,40 @@ body {
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+.trace-turn {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+}
+.trace-turn__title {
+  margin-bottom: 10px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.trace-turn__item + .trace-turn__item {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+.trace-turn__label {
+  margin-bottom: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+}
+.trace-turn__text {
+  margin: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .tracepanel__steps {
   display: flex;
   flex-direction: column;

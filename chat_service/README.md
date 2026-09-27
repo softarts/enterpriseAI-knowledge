@@ -173,12 +173,14 @@ API、前端任务页面、目录上传组件和样式；包含注释和 docstri
 
 `chat_service` 是 FastAPI 后端和 React 前端 playground。对话入口是
 `chat_service/api/routes_chat.py` 的 `POST /api/chat`，由
-`services/chat_service.py:ChatService.ask()` 编排 request → LLM → response，
-`trace.py:TraceBuilder` 记录执行步骤；前端 `frontend/src/App.jsx` 在浏览器内存中
-维护消息历史，`ChatWindow.jsx` 渲染消息，`TracePanel.jsx` 渲染 trace。
+`chat_service/services/chat/chat_service.py:ChatService.ask()` 编排 request →
+Checkpointer-backed LLM → response，`trace.py:TraceBuilder` 记录执行步骤；前端
+`frontend/src/App.jsx` 在浏览器内存中维护消息历史，`ChatWindow.jsx` 渲染消息，
+`TracePanel.jsx` 展示本次请求的问句与回答以及各执行步骤。Trace 按请求独立生成，
+不会自动拼接同一 conversation 的前序问答。
 
-旧 Chat API 的 LLM 配置在 `chat_service/service/chat/llm_config.yaml`，环境变量可以覆盖模型和 token 上限；
-真实 token 只从环境变量读取。启动方式是 `python -m chat_service.run`，前端位于
+Chat 与 Ask 共用 `qa_service.llm_client.get_llm()` 及 `LLM_API_KEY`、
+`LLM_BASE_URL`、`LLM_MODEL` 等全局环境配置。启动方式是 `python -m chat_service.run`，前端位于
 `chat_service/frontend/`。
 
 ## 文档导入流程
@@ -209,7 +211,7 @@ API 入口在 `api/routes_import.py`：上传返回 `pending`，查询使用
 
 ### 存储和配置
 
-旧 Chat API 默认配置位于 `chat_service/service/chat/config.py:Settings`；文档导入和维护工具使用独立的 `chat_service/import_config.py`：
+Chat server/CORS 设置位于 `chat_service/services/chat/config.py:Settings`；文档导入和维护工具使用独立的 `chat_service/import_config.py`：
 
 | 配置 | 默认值 | 作用 |
 |---|---|---|
@@ -249,25 +251,27 @@ taxonomy 仍由 `kb_classifier.taxonomy_classifier.classify.py:TaxonomyClassifie
 
 ```text
 Browser App.jsx
-  -> POST /api/chat {question}
+  -> POST /api/chat {question} + X-Conversation-Id
   -> routes_chat.py
   -> ChatService.ask()
-  -> HuggingFaceLLM.chat()
+  -> LangGraph agent + Checkpointer(thread_id)
+  -> qa_service.llm_client.get_llm()
   -> answer + trace
   -> ChatWindow.jsx / TracePanel.jsx
 ```
 
-后端是无状态的，单次请求只接收当前 `question`；对话历史由
-`frontend/src/App.jsx` 的 React state 保存在浏览器内存，刷新页面会清空历史。消息
-列表由 `ChatWindow.jsx` 渲染，单条消息由 `Message.jsx` 渲染，后端真实执行步骤由
+前端为每个浏览器 tab 在 `sessionStorage` 生成并复用 `X-Conversation-Id`；后端
+使用该值作为 LangGraph `thread_id`，通过进程级 `MemorySaver` 自动恢复并保存消息。
+不同 thread 不共享历史；进程重启后历史清空。`/api/chat` 是纯聊天，不执行 RAG。
+消息列表由 `ChatWindow.jsx` 渲染，单条消息由 `Message.jsx` 渲染，后端执行步骤由
 `TracePanel.jsx` 渲染。
 
 主要 API：
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| `GET` | `/api/health` | 服务状态和 token 是否已配置 |
-| `POST` | `/api/chat` | 单轮问题，返回 answer 和 trace |
+| `GET` | `/api/health` | 服务状态和共享 LLM 配置是否完整 |
+| `POST` | `/api/chat` | 纯聊天；需要 `X-Conversation-Id`，返回 answer 和 trace |
 | `POST` | `/api/documents/import` | 上传并转换、分类，返回 pending |
 | `GET` | `/api/documents/import/{id}` | 查询导入记录 |
 | `POST` | `/api/documents/import/{id}/confirm` | 执行 embedding、Chroma 写入并完成 OKF 入库 |
@@ -275,15 +279,14 @@ Browser App.jsx
 | `GET` | `/api/documents` | 分页列出已导入文档 |
 | `GET` | `/api/documents/{id}/preview` | 预览 OKF 的正文 metadata |
 
-LLM 的非机密配置在 `chat_service/service/chat/llm_config.yaml`，例如 provider、model、
-`max_tokens` 和 `${HF_TOKEN}` 引用。真实 token 只从环境变量读取。`max_tokens` 只
-限制 completion，不限制 prompt；如果 trace 的 `finish_reason` 为 `length`，表示
-输出触达上限，可能被截断。配置优先级为环境变量 > YAML > 内置默认值。
+LLM 直接使用 `qa_service` 的全局 OpenAI-compatible 配置：`LLM_BASE_URL`、
+`LLM_MODEL`、`LLM_API_KEY`、`LLM_MAX_TOKENS` 和 `LLM_ENABLE_THINKING`。`/api/health`
+只返回配置完整性布尔值，不返回密钥。
 
 后端启动：
 
 ```bash
-export HF_TOKEN=hf_xxx
+# Configure LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY in the environment.
 python -m chat_service.run
 ```
 
@@ -298,5 +301,5 @@ npm run dev
 ## 当前边界
 
 taxonomy 仍由 `kb_classifier` 提供，chat_service 不修改 taxonomy 版本、阈值或匹配
-算法。文档导入已接入 embedding 和 ChromaDB；对话 Ask 流程仍是单轮 LLM 调用，
-RAG context 组装尚未接入 `/api/chat`。
+算法。文档导入已接入 embedding 和 ChromaDB；`/api/chat` 使用短期 Checkpointer，
+不执行 RAG。RAG 仍由独立的 `/api/ask` 提供。

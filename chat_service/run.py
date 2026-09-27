@@ -5,7 +5,7 @@ Usage:
     python -m chat_service.run
 
 Environment:
-    HF_TOKEN    - required for legacy direct-chat calls (see chat_service/service/chat/config.py)
+    LLM_API_KEY, LLM_BASE_URL, LLM_MODEL - shared OpenAI-compatible LLM settings
     CHAT_HOST   - default 0.0.0.0
     CHAT_PORT   - default 8100
 """
@@ -15,6 +15,7 @@ import logging
 import uvicorn
 import os
 from chat_service.services.chat.config import settings
+from qa_service import config as qa_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,8 +29,8 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info("Enterprise AI Playground — chat_service")
     logger.info("API: http://%s:%d", settings.host, settings.port)
-    logger.info("Model: %s", settings.model)
-    logger.info("HF_TOKEN configured: %s", bool(settings.hf_token()))
+    logger.info("Model: %s", qa_config.LLM_MODEL)
+    logger.info("LLM_API_KEY configured: %s", bool(qa_config.LLM_API_KEY))
     logger.info("CORS origins: %s", ", ".join(settings.cors_origins))
     logger.info("=" * 60)
 

@@ -7,7 +7,7 @@ qa_service.pipeline — 问答主入口。
        不通过 → 直接返回"未找到相关信息"，不调用 LLM
     3. prompt_builder.build_context(chunks) 组装 context 字符串
     4. 把 context 渲染进 SYSTEM_PROMPT
-    5. llm_client.generate(...)             LangChain LCEL chain 调用 LLM
+    5. LangGraph agent                     thread_id 有值时由 Checkpointer 恢复历史
     6. reflection.reflect(...)              Reflection 评审
     7. 返回 AnswerResult
 """
@@ -29,7 +29,6 @@ _NOT_FOUND_ANSWER = "根据现有知识库内容，未能找到与该问题相�
 
 def answer_question(
     question: str,
-    user_id: Optional[str] = None,
     thread_id: Optional[str] = None,
     memory_runtime: Optional[Any] = None,
 ) -> AnswerResult:
@@ -38,9 +37,8 @@ def answer_question(
 
     Args:
         question: 用户输入的自然语言问题。
-        user_id: 用户级长期 memory namespace。
         thread_id: LangGraph Checkpointer 使用的短期对话 thread。
-        memory_runtime: 可注入的 application-scoped MemoryRuntime。
+        memory_runtime: 可注入的 application-scoped Checkpointer runtime。
 
     Returns:
         AnswerResult:
@@ -49,7 +47,7 @@ def answer_question(
             passed_reflection — Reflection 校验结果（未找到时为 None）
     """
     question = (question or "").strip()
-    if memory_runtime is None and (user_id or thread_id):
+    if memory_runtime is None and thread_id:
         try:
             from langchain_memory import get_default_memory_runtime
 
@@ -61,10 +59,8 @@ def answer_question(
 
     if memory_runtime is not None:
         memory_context = memory_runtime.prepare_context(
-            user_id=user_id,
             thread_id=thread_id,
             question=question,
-            top_k=config.TOP_K,
         )
     else:
         memory_context = MemoryContext(
@@ -74,12 +70,10 @@ def answer_question(
 
     trace = TraceBuilder()
     trace.add_step(
-        "memory",
+        "short_term_memory",
         {
             "enabled": memory_runtime is not None,
-            "user_id_present": bool(user_id),
             "thread_id_present": bool(thread_id),
-            "store_type": type(memory_runtime.store).__name__ if memory_runtime is not None else None,
             "retrieval_query": memory_context.retrieval_query,
             "short_term_messages": len(memory_context.conversation_messages),
         },
@@ -102,9 +96,7 @@ def answer_question(
     # Step 1: 向量检索
     retrieval_started = time.perf_counter()
     logger.info(
-        "qa.retrieval.start memory_enabled=%s user_id_present=%s thread_id_present=%s query_chars=%d",
-        memory_runtime is not None,
-        bool(user_id),
+        "qa.retrieval.start thread_id_present=%s query_chars=%d",
         bool(thread_id),
         len(memory_context.retrieval_query),
     )
@@ -151,7 +143,7 @@ def answer_question(
         answer.trace = trace.build()
         return answer
 
-    # Step 3: 组装 enterprise context and optional conversational context.
+    # Step 3: 组装企业知识 context；thread history 由回答图 Checkpointer 恢复。
     enterprise_context = prompt_builder.build_context(chunks)
     context = memory_context.format_with_enterprise_context(enterprise_context)
     trace.add_step(
@@ -160,8 +152,6 @@ def answer_question(
             "chars": len(context),
             "enterprise_chars": len(enterprise_context),
             "chunks": len(chunks),
-            "memory_enabled": memory_runtime is not None,
-            "user_id_present": bool(user_id),
             "thread_id_present": bool(thread_id),
             "short_term_messages": len(memory_context.conversation_messages),
         },
@@ -172,14 +162,13 @@ def answer_question(
 
     # Step 5: 调用 LLM
     llm_started = time.perf_counter()
-    if memory_runtime is not None and user_id:
+    if memory_runtime is not None and thread_id:
         try:
             draft_answer = memory_runtime.generate_answer_with_memory(
                 llm=llm_client.get_llm(),
                 system_prompt=system_prompt,
                 question=question,
-                user_id=user_id,
-                top_k=config.TOP_K,
+                thread_id=thread_id,
             )
         except Exception:
             logger.warning(
@@ -385,12 +374,5 @@ def answer_question(
     )
     answer.trace = trace.build()
 
-    if memory_runtime is not None:
-        memory_runtime.record_turn(
-            user_id=user_id,
-            thread_id=thread_id,
-            question=question,
-            answer=final_answer,
-        )
     return answer
 

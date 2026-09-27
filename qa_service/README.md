@@ -17,6 +17,7 @@
 - [Reflection 接口说明](#reflection-接口说明)
 - [环境变量配置](#环境变量配置)
 - [API 端点](#api-端点)
+- [`/api/chat` 短期记忆](#api-chat-短期记忆)
 - [前端集成](#前端集成)
 - [置信度阈值说明](#置信度阈值说明)
 - [下一阶段任务](#下一阶段任务)
@@ -33,7 +34,7 @@
 |---|---|
 | `embedding_service` (bge-m3) | 文档解析、chunking、向量编码（1024 维，L2 归一化） |
 | `vector_service` (ChromaDB) | 向量持久化、Top-K 余弦距离检索 |
-| `chat_service` | FastAPI 后端 + React 前端（直连 HF LLM，无 RAG） |
+| `chat_service` | FastAPI 后端 + React 前端（纯聊天与 Ask/RAG 为独立流程） |
 
 本阶段目标：
 - 实现最简 RAG 流程：检索一次 → 生成一次 → 返回答案+引用
@@ -522,6 +523,54 @@ Content-Type: application/json
 
 ---
 
+## `/api/chat` 短期记忆
+
+`/api/chat` 是纯聊天接口，不执行知识库检索；它与 `/api/ask` 的 RAG pipeline 分开。聊天历史由 LangGraph Checkpointer 在服务进程内按 conversation ID 保存，不依赖前端把整段历史重复提交。
+
+### 请求与记忆流程
+
+前端在当前浏览器 tab 的 `sessionStorage` 中创建并复用 conversation ID，通过 `X-Conversation-Id` 发送。后端将其作为 LangGraph 的 `thread_id`：调用前从 Checkpointer 读取该 thread 的消息，图执行时把新 HumanMessage 与已有消息合并交给共享 LLM，随后将新增 HumanMessage 和 AIMessage checkpoint 保存下来。
+
+```mermaid
+flowchart TD
+  Browser[浏览器当前 tab] -->|sessionStorage conversation ID| API[POST /api/chat<br/>X-Conversation-Id]
+  API --> Route[routes_chat.py]
+  Route --> Service[ChatService.ask]
+  Service -->|thread_id| Read[MemoryRuntime.prepare_context<br/>读取已有 checkpoint 消息]
+  Read --> Graph[LangGraph: START → agent → END]
+  Graph -->|SystemMessage + checkpoint 历史 + 当前问题| LLM[共享 LLM<br/>qa_service.llm_client.get_llm]
+  LLM -->|AIMessage| Save[MemorySaver checkpoint<br/>保存本轮 HumanMessage + AIMessage]
+  Save --> Response[ChatResponse: answer + trace + error]
+  Response --> Browser
+```
+
+Checkpointer 生命周期与边界：
+
+- `routes_chat.py` 在模块加载时创建一个进程级 `MemoryRuntime`。当前默认实现使用 `MemorySaver`，适合单进程开发/验证；进程退出后内存状态不会持久化，多 worker 也不会共享这份内存状态。
+- 同一 `X-Conversation-Id` 会恢复同一条 thread 的消息；不同 ID 相互隔离。前端 ID 存于 tab-scoped `sessionStorage`，因此新 tab 或清除该存储会产生新的对话 ID。
+- 图节点只把 SystemMessage 临时放在传给模型的输入前面；持久化的 `messages` 状态包含用户与助手对话，不包含这条系统提示。
+- 服务使用共享的 `qa_service.llm_client.get_llm()` 和 QA 的 LLM 配置；`/api/chat` 不经过 `/api/ask` 的检索、来源引用或 Reflection 流程。
+
+### Trace 范围与验证
+
+每次 `ChatService.ask()` 都新建一个 `TraceBuilder`，所以 trace 是**单个 HTTP 请求的执行记录**，不会按 conversation ID 聚合之前请求的 request/llm/response 步骤。第二轮 trace 中看不到第一轮问答步骤是预期行为；第一轮有独立的 trace ID 和响应。
+
+request 步骤提供 `checkpoint_messages_before`，只记录调用前恢复到的消息数量，不记录消息文本。空 thread 预期是 `0`；完成一轮问答后再次使用相同 ID，下一次调用前预期是 `2`（第一轮的 HumanMessage 与 AIMessage）。此计数证明 Checkpointer 在调用前提供了历史消息，但仅凭计数或模型回答不能证明远端模型确实依据历史作答。集成测试使用真实 `MemorySaver` 运行两轮，并断言计数为 `0`、`2`、trace ID 不同且第二轮回答依赖第一轮身份信息。
+
+每份 trace 还包含本次请求的 `request.question` 和 `response.answer`。Trace 面板会在步骤列表上方显示本轮问答；因此第二轮 trace 会展示第二轮问题及其回答，但不会拼接第一轮的对话内容。
+
+主要实现位置：
+
+- 前端 ID 生成与请求头：[chatApi.js](../chat_service/frontend/src/api/chatApi.js#L7-L29)
+- 路由、进程级 runtime 与请求转发：[routes_chat.py](../chat_service/api/routes_chat.py#L18-L51)
+- 每请求读取 checkpoint 数量并生成 trace：[chat_service.py](../chat_service/services/chat/chat_service.py#L30-L47)
+- Checkpointer 读取、图调用和 thread 配置：[runtime.py](../langchain_memory/app/runtime.py#L35-L82)
+- Agent 图节点、消息拼接与 Checkpointer 编译：[graph.py](../langchain_memory/app/graph.py#L25-L59)
+- 每请求 trace builder：[trace.py](../chat_service/trace.py#L40-L85)
+- 两轮短期记忆与 trace 断言：[test_chat_short_term_memory.py](../chat_service/test/test_chat_short_term_memory.py#L46-L75)
+
+---
+
 ## 前端集成
 
 ### 文件改动汇总
@@ -683,7 +732,7 @@ chat_service.api.routes_ask
     └── qa_service.pipeline
 
 chat_service.main
-    ├── chat_service.api.routes_chat    ← 不修改（Chat 直连 HF LLM）
+  ├── chat_service.api.routes_chat    ← 纯聊天 + Checkpointer 短期记忆
     ├── chat_service.api.routes_ask     ← 新增
     └── chat_service.api.routes_import  ← 不修改
 ```

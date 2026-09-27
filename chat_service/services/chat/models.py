@@ -1,4 +1,4 @@
-"""Request and response models for the legacy direct-chat API."""
+"""Request and response models for the Checkpointer-backed chat API."""
 
 from typing import Any, Dict, Optional
 
