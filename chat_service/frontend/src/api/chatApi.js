@@ -20,9 +20,10 @@ function getConversationId() {
  * @param {string} question
  * @returns {Promise<{answer: string, trace: object, error: string|null}>}
  */
-export async function askQuestion(question) {
+export async function askQuestion(question, { signal } = {}) {
   const res = await fetch(CHAT_ENDPOINT, {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
       "X-Conversation-Id": getConversationId(),

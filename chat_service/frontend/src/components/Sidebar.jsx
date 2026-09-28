@@ -52,6 +52,7 @@ export default function Sidebar({ collapsed, onToggle, activeView, onViewChange 
                 <button
                   key={item.key}
                   className={`sidebar__item sidebar__item--sub ${activeView === item.key ? "sidebar__item--active" : ""}`}
+                  title={item.label}
                   onClick={() => onViewChange?.(item.key)}
                   id={`nav-${item.key}`}
                 >

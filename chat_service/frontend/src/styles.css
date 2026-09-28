@@ -608,10 +608,12 @@ body {
 .chatwindow__messages {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 96px;
+  width: min(100%, 820px);
+  margin: 0 auto;
+  padding: 24px 28px 12px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
   min-height: 100px;
   /* VS Code / Claude style flat scrollbar — scoped to this element */
   scrollbar-width: thin;
@@ -648,26 +650,29 @@ body {
 }
 
 .message {
-  max-width: 720px;
+  max-width: 82%;
   width: fit-content;
   padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
+  border-radius: 14px;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .message--user {
   align-self: flex-end;
   background: var(--user);
+  border: 1px solid var(--border);
 }
 .message--assistant {
   align-self: flex-start;
-  background: var(--assistant);
+  max-width: 100%;
+  padding: 4px 0;
+  background: transparent;
 }
 .message--error {
   align-self: flex-start;
   background: var(--error-bg);
   border-color: var(--error-border);
+  border: 1px solid var(--error-border);
 }
 .message__role {
   font-size: 11px;
@@ -707,83 +712,142 @@ body {
   }
 }
 
-/* ---------- Chat window resizer ---------- */
-.chatwindow__resizer {
-  height: 10px;
-  margin-top: -5px;
-  margin-bottom: -5px;
-  cursor: row-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 10;
-  background: transparent;
-  user-select: none;
-  touch-action: none;
-}
-.chatwindow__resizer:hover,
-.chatwindow__resizer--active {
-  background: rgba(108, 140, 255, 0.15);
-}
-.chatwindow__resizer-line {
-  width: 44px;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--border);
-  transition: background-color 0.15s ease;
-}
-.chatwindow__resizer:hover .chatwindow__resizer-line,
-.chatwindow__resizer--active .chatwindow__resizer-line {
-  background: var(--accent);
-}
-
 /* ---------- Input box ---------- */
+.chatwindow__composer {
+  width: min(100%, 820px);
+  margin: 0 auto;
+  padding: 8px 28px 20px;
+  flex-shrink: 0;
+}
 .inputbox {
   display: flex;
-  gap: 10px;
-  padding: 16px 24px;
-  padding: 14px 24px;
-  border-top: 1px solid var(--border);
-  background: var(--bg);
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #3a414f;
+  border-radius: 14px;
+  background: var(--bg-elev);
   box-sizing: border-box;
-  flex-shrink: 0;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.inputbox:focus-within {
+  border-color: #59677f;
+  box-shadow: 0 0 0 1px rgba(108, 140, 255, 0.12);
 }
 .inputbox__textarea {
   flex: 1;
-  height: 100%;
+  min-width: 0;
+  min-height: 42px;
+  max-height: 240px;
   resize: none;
-  background: var(--bg-elev);
+  overflow-y: hidden;
+  background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 9px;
   font-family: inherit;
   font-size: 14px;
-  max-height: 160px;
   line-height: 1.5;
   box-sizing: border-box;
 }
 .inputbox__textarea:focus {
   outline: none;
-  border-color: var(--accent);
+}
+.inputbox__textarea::placeholder {
+  color: #858d9b;
 }
 .inputbox__send {
-  align-self: flex-end;
+  width: 42px;
   height: 42px;
+  display: grid;
+  place-items: center;
   background: var(--accent);
-  color: #0d1020;
+  color: #10131a;
   border: none;
   border-radius: 10px;
-  padding: 0 20px;
-  font-weight: 600;
+  font-size: 24px;
+  line-height: 1;
+  font-weight: 500;
   cursor: pointer;
   flex-shrink: 0;
   transition: opacity 0.15s ease, background-color 0.15s ease;
 }
 .inputbox__send:disabled {
-  opacity: 0.5;
+  background: #343a46;
+  color: #777f8d;
   cursor: not-allowed;
+}
+.inputbox__stop {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: #e25b61;
+  color: #fff;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.inputbox__stop:hover {
+  background: #f06a70;
+  transform: scale(1.04);
+}
+.inputbox__stop:focus-visible,
+.inputbox__send:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+.inputbox__stop-icon {
+  width: 13px;
+  height: 13px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+@media (max-width: 700px) {
+  .layout {
+    grid-template-columns: 56px minmax(0, 1fr) !important;
+  }
+  .layout > :last-child,
+  .tracepanel {
+    display: none;
+  }
+  .sidebar__header {
+    justify-content: center;
+    padding: 8px 4px;
+    border-bottom: 0;
+  }
+  .sidebar__title,
+  .sidebar__toggle,
+  .sidebar__label,
+  .sidebar__group-chevron {
+    display: none;
+  }
+  .sidebar__nav {
+    padding: 4px;
+  }
+  .sidebar__item,
+  .sidebar__group-title {
+    justify-content: center;
+    padding: 10px 0;
+  }
+  .sidebar__submenu {
+    margin: 4px 0;
+    padding: 0;
+    border: 0;
+  }
+  .chatwindow__messages {
+    padding: 18px 16px 10px;
+  }
+  .chatwindow__composer {
+    padding: 8px 12px 12px;
+  }
+  .message {
+    max-width: 92%;
+  }
 }
 
 /* ---------- Trace panel ---------- */

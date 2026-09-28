@@ -89,6 +89,13 @@ chat.memory.call.completed thread_id=... answer_chars=... duration_ms=...
 
 若 LLM 或图执行失败，会记录 `chat.memory.call.failed`，随后由 chat service 返回带错误信息的响应。日志只记录诊断元数据，避免将用户对话正文写入常规服务日志。
 
+> **调试例外**：`memory.agent.request_payload` 会打印**完整出站请求体**（含 `messages` 全文与 `tools` schema），因此包含用户问题与全部历史，**与上述「不打印对话正文」的约定相反**。它只用于排查模型为何不调用工具，上线前应移除或降级。实现见 `_build_request_payload_preview()`（`app/graph.py:59`）与 `agent` 内的调用点（`app/graph.py:112`）。
+>
+> 该函数依赖 provider 的私有方法 `ChatOpenAI._get_request_payload`，因此：
+> - 只有 OpenAI 兼容模型会打出这条日志；`DeterministicMockChatModel` 等自研/测试模型没有该方法，会**静默跳过**（实测 `request_payload` 出现 0 次）。
+> - 失败时只记 `memory.agent.payload.preview_failed` 并继续请求，不会中断回答。
+> - 重建时把 `bind_tools` 产生的 `RunnableBinding.kwargs`（含 `tools`）原样回填，因此**包含实际发出的 schema**。
+
 ## 短期记忆的读与写
 
 ### 读取：两个时机
@@ -124,26 +131,26 @@ result = answer_graph.invoke(
 )
 ```
 
-Checkpointer 在 `workflow.compile(checkpointer=...)`（`graph.py:202`）时绑定到整张图。因此 `agent` 节点收到的 `state["messages"]` 已经是「历史消息 + 本轮 HumanMessage」，不需要用户代码手动拼接。
+Checkpointer 在 `workflow.compile(checkpointer=...)`（`graph.py:241`）时绑定到整张图。因此 `agent` 节点收到的 `state["messages"]` 已经是「历史消息 + 本轮 HumanMessage」，不需要用户代码手动拼接。
 
 **发送给 LLM 的是全部历史，不是过去 N 条。** `agent` 节点把 `state["messages"]` 整个列表发给模型：
 
 ```python
-# langchain_memory/app/graph.py L72, L81
+# langchain_memory/app/graph.py L101, L81
 messages = state["messages"]                       # L72 全量历史 + 本轮问题
 response = llm_with_tools.invoke([system] + messages, config=config)   # L81 全部发送
 ```
 
 当前实现没有任何截断、窗口或 N 条限制；`checkpoint_messages_before` 计数是多少，模型输入就包含多少条历史消息。因此当前**不可配置**：没有提供 `N`、token 预算或消息窗口的配置项。对话轮数增多后，模型输入 token 会线性增长，可能触及模型上下文上限或增加费用。
 
-若需要限制，可在 `agent` 节点内（`graph.py:72` 之后、`graph.py:81` 之前）对 `messages` 做截断，例如保留最近 N 条或按 token 预算裁剪；这属于未来扩展，当前代码未实现。
+若需要限制，可在 `agent` 节点内（`graph.py:101` 之后、`graph.py:118` 之前）对 `messages` 做截断，例如保留最近 N 条或按 token 预算裁剪；这属于未来扩展，当前代码未实现。
 
 ### 写入：agent 节点返回后自动持久化
 
 写入没有显式的用户代码调用，发生在每个 superstep（本图只有 `agent` 一个节点）结束时：
 
 ```python
-# langchain_memory/app/graph.py L88 — agent 节点返回状态增量
+# langchain_memory/app/graph.py L125 — agent 节点返回状态增量
 return {"messages": [response]}    # 只包含本轮 AIMessage
 
 # langchain_memory/app/state.py L23 — add_messages reducer 声明
@@ -152,11 +159,11 @@ messages: Annotated[List[BaseMessage], add_messages]
 
 顺序：
 
-1. `agent` 返回增量 `{"messages": [AIMessage]}`（`graph.py:88`）。
+1. `agent` 返回增量 `{"messages": [AIMessage]}`（`graph.py:125`）。
 2. `add_messages` reducer（`state.py:23`）把增量合并进已有消息列表；invoke 输入的 HumanMessage 也在这一步进入 state。
-3. LangGraph 在 superstep 结束时把更新后的 channel values 通过绑定的 Checkpointer 持久化（`graph.py:202` 编译时绑定）。
+3. LangGraph 在 superstep 结束时把更新后的 channel values 通过绑定的 Checkpointer 持久化（`graph.py:241` 编译时绑定）。
 
-总结：**读发生在 invoke 前（显式，`runtime.py:63`）和 invoke 启动时（自动，`runtime.py:127`）；写发生在 `agent` 节点执行完、superstep 提交时（自动，`graph.py:88` + `state.py:23`）**。SystemMessage 只临时加在模型输入前，不进入 state，因此不会被写入。
+总结：**读发生在 invoke 前（显式，`runtime.py:63`）和 invoke 启动时（自动，`runtime.py:127`）；写发生在 `agent` 节点执行完、superstep 提交时（自动，`graph.py:125` + `state.py:23`）**。SystemMessage 只临时加在模型输入前，不进入 state，因此不会被写入。
 
 ## QA 流程
 
@@ -201,8 +208,8 @@ python3 -m pytest qa_service/test langchain_memory/tests -q
 - `langchain_memory/app/runtime.py:57`：`MemoryRuntime.prepare_context()`，按 thread 只读 checkpoint；日志记录消息数量和类型。
 - `langchain_memory/app/runtime.py:91`：`generate_answer_with_memory()`，构图并以当前 HumanMessage 和 `thread_id` 调用 `invoke()`。
 - `langchain_memory/app/runtime.py:110`：`memory.graph.*`，记录图构建、invoke 开始和结束。
-- `langchain_memory/app/graph.py:53`：`create_agent_node()`，临时添加 SystemMessage 并调用 LLM；记录 Agent 进入和完成。
-- `langchain_memory/app/graph.py:164`：`build_memory_agent_graph()`，声明唯一控制流 `START -> agent -> END` 并编译时绑定 Checkpointer。
+- `langchain_memory/app/graph.py:82`：`create_agent_node()`，临时添加 SystemMessage 并调用 LLM；记录 Agent 进入和完成。
+- `langchain_memory/app/graph.py:203`：`build_memory_agent_graph()`，声明唯一控制流 `START -> agent -> END` 并编译时绑定 Checkpointer。
 - `langchain_memory/app/runtime.py:153`：`create_memory_runtime()`，只创建 Checkpointer runtime。
 - `qa_service/pipeline.py:30`：`answer_question()`，thread-scoped QA 集成。
 - `qa_service/pipeline.py:148`：企业知识 context 构造，不拼短期历史。
@@ -216,9 +223,9 @@ python3 -m pytest qa_service/test langchain_memory/tests -q
 - `langchain_memory/app/long_memory.py:138`：`extract_and_save_memory()`，结构化提取 + 条件写入。
 - `langchain_memory/app/long_memory.py:186`：`create_search_memory_tool()`，Agent 自主检索工具。
 - `langchain_memory/app/long_memory_prompts.py:12`：`MemoryExtraction` schema 与提取提示词。
-- `langchain_memory/app/graph.py:93`：`should_continue()`，tool_calls 条件边。
-- `langchain_memory/app/graph.py:104`：`create_update_memory_node()`，回答后写入节点。
-- `langchain_memory/app/graph.py:164`：`build_memory_agent_graph()`，同时绑定 checkpointer 与 store。
+- `langchain_memory/app/graph.py:130`：`should_continue()`，tool_calls 条件边。
+- `langchain_memory/app/graph.py:143`：`create_update_memory_node()`，回答后写入节点。
+- `langchain_memory/app/graph.py:203`：`build_memory_agent_graph()`，同时绑定 checkpointer 与 store。
 - `langchain_memory/app/config.py:27`：`MEMORY_EMBEDDING_MODEL/DIMS/TOP_K` 配置；`app/config.py:53`：`get_embeddings()`。
 - `langchain_memory/tests/test_long_term_memory.py`：长期记忆测试。
 
@@ -372,7 +379,7 @@ flowchart TD
     Store[(BaseStore<br/>长期记忆)] -. compile 时绑定<br/>InjectedStore 注入 tools / update_memory .-> Graph
 ```
 
-条件边 `should_continue`（`app/graph.py:93`）只判断最后一条 `AIMessage` 是否带 `tool_calls`：有则去 `tools`，否则去 `update_memory`。长期记忆检索完全由 LLM 在 tool-calling 循环里自主决定，pipeline 不预先检索，也没有任何硬编码 query 重写规则。
+条件边 `should_continue`（`app/graph.py:130`）只判断最后一条 `AIMessage` 是否带 `tool_calls`：有则去 `tools`，否则去 `update_memory`。长期记忆检索完全由 LLM 在 tool-calling 循环里自主决定，pipeline 不预先检索，也没有任何硬编码 query 重写规则。
 
 ### 核心代码
 
@@ -403,10 +410,10 @@ def search_memory(
     memories = retrieve_user_memories(store=store, user_id=user_id, query=query, top_k=top_k)
 ```
 
-写入节点（`app/graph.py:104`）：回答结束后执行，不暴露为工具；`llm.with_structured_output(MemoryExtraction)` 结构化提取，失败只记日志、不中断回答。
+写入节点（`app/graph.py:143`）：回答结束后执行，不暴露为工具；`llm.with_structured_output(MemoryExtraction)` 结构化提取，失败只记日志、不中断回答。
 
 ```python
-# langchain_memory/app/graph.py L104-160（节选）
+# langchain_memory/app/graph.py L143-160（节选）
 def create_update_memory_node(llm: BaseChatModel):
     extraction_llm = llm.with_structured_output(MemoryExtraction)
     def update_memory(state, config, *, store: BaseStore):
@@ -431,10 +438,10 @@ flowchart TD
 
 #### 环节一：声明（本地，唯一可控的一环）
 
-`app/graph.py:66` 把工具绑定到模型上：
+`app/graph.py:95` 把工具绑定到模型上：
 
 ```python
-# langchain_memory/app/graph.py L66
+# langchain_memory/app/graph.py L95
 llm_with_tools = llm.bind_tools(list(tools)) if tools else llm
 ```
 
@@ -467,7 +474,7 @@ tools         | [search_memory 的 function 定义]
 
 #### 环节三：落地（本地，只读结果）
 
-`should_continue`（`app/graph.py:93`）不判断、不干预，只读：
+`should_continue`（`app/graph.py:130`）不判断、不干预，只读：
 
 ```python
 if isinstance(last_message, AIMessage) and last_message.tool_calls:
@@ -519,10 +526,10 @@ that makes sense without the surrounding conversation.
 
 工具**没有单独的「初始化」步骤**，而是在每次构图时由 `build_memory_agent_graph()` 按需创建。调用方通常什么都不传，走默认分支。
 
-**第 1 步：决定工具列表。** `app/graph.py:180-184`——判断条件是 `tools is not None`，不是 `if tools`：
+**第 1 步：决定工具列表。** `app/graph.py:219-184`——判断条件是 `tools is not None`，不是 `if tools`：
 
 ```python
-# langchain_memory/app/graph.py L180-184
+# langchain_memory/app/graph.py L219-184
 active_tools: List[BaseTool] = (
     list(tools)
     if tools is not None
@@ -542,17 +549,17 @@ active_tools: List[BaseTool] = (
 
 **第 2 步：工具对象本体。** `create_search_memory_tool()`（`app/long_memory.py:186`）是一个**工厂函数**：内部定义一个被 `@tool` 装饰的嵌套函数并返回它。工具的 `name` 来自内层函数名（`search_memory`），`description` 来自它的 docstring——这两者就是模型做决策时看到的全部说明文字。因为是工厂而非模块级常量，每次构图都会得到一个新的工具实例，闭包捕获本次的 `default_top_k`。
 
-**第 3 步：把工具声明给 LLM。** `app/graph.py:66`——工具被绑定到模型上，而不是由 pipeline 预检索：
+**第 3 步：把工具声明给 LLM。** `app/graph.py:95`——工具被绑定到模型上，而不是由 pipeline 预检索：
 
 ```python
-# langchain_memory/app/graph.py L66
+# langchain_memory/app/graph.py L95
 llm_with_tools = llm.bind_tools(list(tools)) if tools else llm
 ```
 
-**第 4 步：把工具交给执行器。** `app/graph.py:191`——`ToolNode` 是真正调用工具的节点，它按工具名建索引来分发 LLM 发来的 `tool_call`：
+**第 4 步：把工具交给执行器。** `app/graph.py:230`——`ToolNode` 是真正调用工具的节点，它按工具名建索引来分发 LLM 发来的 `tool_call`：
 
 ```python
-# langchain_memory/app/graph.py L187-192
+# langchain_memory/app/graph.py L226-192
 workflow.add_node("agent", create_agent_node(active_llm, system_prompt=system_prompt, tools=active_tools))
 workflow.add_node("tools", ToolNode(active_tools))
 workflow.add_node("update_memory", create_update_memory_node(active_llm))
@@ -587,7 +594,7 @@ workflow.add_node("update_memory", create_update_memory_node(active_llm))
 
 #### 实测调用栈（`traceback.format_stack()`）
 
-在 `app/graph.py:93-97` 临时插入打印后，**一次带工具调用的问答共打印两次**，两次栈完全相同：
+在 `app/graph.py:130-97` 临时插入打印后，**一次带工具调用的问答共打印两次**，两次栈完全相同：
 
 ```text
 ============================== should_continue stack trace ==============================
@@ -626,14 +633,14 @@ workflow.add_node("update_memory", create_update_memory_node(active_llm))
 
 这解释了为什么栈里**看不到** `agent` 节点函数本体、也看不到 `build_memory_agent_graph`：路由不是被单独调度的 task，而是 `agent` 所在 step 的后续 writer，用的是 `agent` 返回后的新 state。也解释了 `should_continue` 为什么**永远不会看到 `ToolMessage` 结尾的 state**——`tools -> agent` 是无条件边，路由只在 `agent` 之后求值一次；一旦 `ToolNode` 执行完，state 末尾是 `ToolMessage`，但下一跳是直接去 `agent`，不经过路由。
 
-> 排查提示：栈顶第 11 层 `context.run(self.func, ...)`（`_runnable.py:394`）里被调用的 `self.func` 就是 `should_continue` 本身，但 `traceback.format_stack()` 只打印到当前函数边界，所以输出里看不到 `graph.py:93` 那一帧——它就是这段代码所在的位置。若要连同当前帧一起显示，去掉切片 `[:-1]`。
+> 排查提示：栈顶第 11 层 `context.run(self.func, ...)`（`_runnable.py:394`）里被调用的 `self.func` 就是 `should_continue` 本身，但 `traceback.format_stack()` 只打印到当前函数边界，所以输出里看不到 `graph.py:130` 那一帧——它就是这段代码所在的位置。若要连同当前帧一起显示，去掉切片 `[:-1]`。
 
 #### 触发时点与路由结果（实测）
 
-**注册。** `app/graph.py:194-197`——第二个参数是路由函数，第三个参数是「返回值 → 目标节点名」的映射表：
+**注册。** `app/graph.py:233-197`——第二个参数是路由函数，第三个参数是「返回值 → 目标节点名」的映射表：
 
 ```python
-# langchain_memory/app/graph.py L194-197
+# langchain_memory/app/graph.py L233-197
 workflow.add_conditional_edges(
     "agent",
     should_continue,
@@ -641,10 +648,10 @@ workflow.add_conditional_edges(
 )
 ```
 
-**触发时机。** 每当 `agent` 节点执行完毕，LangGraph 在同一个 superstep 的「分支」阶段，用**已经合并过 `agent` 返回增量之后的状态**调用 `should_continue(state)`。`agent` 返回的是 `{"messages": [response]}`（`app/graph.py:88`），`add_messages` reducer（`app/state.py:23`）把它追加到列表末尾，所以 `state["messages"][-1]` 一定就是本次 agent 刚产出的那条 `AIMessage`。判断因此退化为一个纯粹的「最后一条消息是什么」：
+**触发时机。** 每当 `agent` 节点执行完毕，LangGraph 在同一个 superstep 的「分支」阶段，用**已经合并过 `agent` 返回增量之后的状态**调用 `should_continue(state)`。`agent` 返回的是 `{"messages": [response]}`（`app/graph.py:125`），`add_messages` reducer（`app/state.py:23`）把它追加到列表末尾，所以 `state["messages"][-1]` 一定就是本次 agent 刚产出的那条 `AIMessage`。判断因此退化为一个纯粹的「最后一条消息是什么」：
 
 ```python
-# langchain_memory/app/graph.py L93-102
+# langchain_memory/app/graph.py L130-102
 def should_continue(state: MemoryGraphState) -> str:
     """Route to tools while the last AI message requests tool calls."""
     print("=" * 30, "should_continue stack trace", "=" * 30)

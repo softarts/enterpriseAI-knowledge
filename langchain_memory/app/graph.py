@@ -7,12 +7,18 @@ imported here; short-term history stays owned by the Checkpointer.
 
 from __future__ import annotations
 
+import json
 import logging
 import traceback
 from typing import Any, Dict, List, Optional, Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -50,6 +56,29 @@ logging.basicConfig(
 )
 
 
+def _build_request_payload_preview(
+    llm: BaseChatModel,
+    bound: Any,
+    messages: List[BaseMessage],
+) -> Optional[Dict[str, Any]]:
+    """Best-effort reconstruction of the outbound chat-completion payload.
+
+    Intended for debugging only: it never raises, and returns None when the
+    provider does not expose ``_get_request_payload`` (e.g. tests use a mock
+    chat model). ``bound`` is the RunnableBinding produced by ``bind_tools``;
+    its ``kwargs`` carry the exact ``tools`` argument sent to the provider.
+    """
+    builder = getattr(llm, "_get_request_payload", None)
+    if builder is None:
+        return None
+    bound_kwargs = getattr(bound, "kwargs", None) or {}
+    try:
+        return builder(messages, **dict(bound_kwargs))
+    except Exception:
+        logger.warning("memory.agent.payload.preview_failed", exc_info=True)
+        return None
+
+
 def create_agent_node(
     llm: BaseChatModel,
     system_prompt: Optional[str] = None,
@@ -78,7 +107,15 @@ def create_agent_node(
             [getattr(message, "type", type(message).__name__) for message in messages],
         )
         system = SystemMessage(content=system_content)
-        response = llm_with_tools.invoke([system] + messages, config=config)
+        outbound = [system] + messages
+        payload = _build_request_payload_preview(llm, llm_with_tools, outbound)
+        if payload is not None:
+            logger.info(
+                "memory.agent.request_payload thread_id=%s payload=%s",
+                configurable.get("thread_id"),
+                json.dumps(payload, ensure_ascii=False, default=str),
+            )
+        response = llm_with_tools.invoke(outbound, config=config)
         logger.info(
             "memory.agent.completed thread_id=%s response_type=%s tool_calls=%d",
             configurable.get("thread_id"),

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Layout from "./components/Layout.jsx";
 import ChatWindow from "./components/ChatWindow.jsx";
 import AskWindow from "./components/AskWindow.jsx";
@@ -18,6 +18,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [trace, setTrace] = useState(null);
   const [askTrace, setAskTrace] = useState(null);
+  const chatRequestRef = useRef(null);
 
   // Ask (RAG) — independent state so switching views preserves history
   const [askMessages, setAskMessages] = useState([]);
@@ -27,11 +28,13 @@ export default function App() {
   const [traceCollapsed, setTraceCollapsed] = useState(false);
 
   async function handleSend(question) {
+    const controller = new AbortController();
+    chatRequestRef.current = controller;
     setMessages((prev) => [...prev, { role: "user", content: question }]);
     setLoading(true);
 
     try {
-      const data = await askQuestion(question);
+      const data = await askQuestion(question, { signal: controller.signal });
 
       // Always show the trace, even for backend-reported errors.
       setTrace(data.trace || null);
@@ -48,14 +51,26 @@ export default function App() {
         ]);
       }
     } catch (err) {
+      if (err.name === "AbortError") return;
       // Network / transport level failure (backend down, etc.).
       setMessages((prev) => [
         ...prev,
         { role: "error", content: err.message || "Request failed." },
       ]);
     } finally {
-      setLoading(false);
+      if (chatRequestRef.current === controller) {
+        chatRequestRef.current = null;
+        setLoading(false);
+      }
     }
+  }
+
+  function handleStopChat() {
+    const controller = chatRequestRef.current;
+    if (!controller) return;
+    chatRequestRef.current = null;
+    controller.abort();
+    setLoading(false);
   }
 
   async function handleAskSend(question) {
@@ -104,7 +119,12 @@ export default function App() {
       showTrace={activeView === "chat" || activeView === "ask"}
     >
       {activeView === "chat" ? (
-        <ChatWindow messages={messages} loading={loading} onSend={handleSend} />
+        <ChatWindow
+          messages={messages}
+          loading={loading}
+          onSend={handleSend}
+          onStop={handleStopChat}
+        />
       ) : activeView === "ask" ? (
         <AskWindow messages={askMessages} loading={askLoading} onSend={handleAskSend} />
       ) : activeView === "import" ? (
