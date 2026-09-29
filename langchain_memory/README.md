@@ -15,6 +15,7 @@
 - [LangGraph 驱动过程：writer 是什么](#langgraph-驱动过程writer-是什么)
 - [长期记忆（V2）Long-term Memory](#长期记忆v2long-term-memory)
   - [模型怎么决定要不要检索长期记忆](#模型怎么决定要不要检索长期记忆)
+    - [search_memory 的执行与结果回传](#search_memory-的执行与结果回传)
   - [工具是在哪里构造的（build_memory_agent_graph）](#工具是在哪里构造的build_memory_agent_graph)
   - [should_continue 是怎么被触发的](#should_continue-是怎么被触发的)
 
@@ -380,6 +381,47 @@ flowchart TD
 ```
 
 条件边 `should_continue`（`app/graph.py:130`）只判断最后一条 `AIMessage` 是否带 `tool_calls`：有则去 `tools`，否则去 `update_memory`。长期记忆检索完全由 LLM 在 tool-calling 循环里自主决定，pipeline 不预先检索，也没有任何硬编码 query 重写规则。
+
+### `search_memory` 的执行与结果回传
+
+一次检索未命中时，`search_memory` 会返回普通字符串 `没有找到与查询相关的长期记忆。`。`memory.longterm.tool.no_memories_found` 只是服务端日志，不是发给模型的内容；真正的工具结果是函数的 `return` 值。
+
+```text
+agent 调用模型
+    -> 模型返回带 tool_calls 的 AIMessage
+    -> should_continue 返回 "tools"
+    -> ToolNode 执行 search_memory
+    -> 工具返回字符串，ToolNode 产出对应的 ToolMessage
+    -> messages 状态合并 ToolMessage
+    -> tools -> agent 回边触发下一轮
+    -> agent 把 SystemMessage + state["messages"] 再传给模型
+```
+
+对应实现分布在三个位置：工具在 `app/long_memory.py:186` 定义并返回命中/未命中的文本；图在 `app/graph.py:230` 注册 `ToolNode`，并在 `app/graph.py:238` 声明 `tools -> agent` 有向边；Agent 在 `app/graph.py:101-118` 读取更新后的消息列表并调用模型。`messages` 字段通过 `add_messages` reducer 合并工具节点返回的消息，见 `app/state.py:23`。
+
+```python
+# app/long_memory.py：未命中时的实际工具结果
+return "没有找到与查询相关的长期记忆。"
+
+# app/graph.py：工具节点完成后只沿此有向边回到 agent
+workflow.add_edge("tools", "agent")
+
+# app/graph.py：下一轮调用把状态中的工具消息一并发给模型
+messages = state["messages"]
+outbound = [system] + messages
+response = llm_with_tools.invoke(outbound, config=config)
+```
+
+反方向 `agent -> tools` 不是 `add_edge("tools", "agent")` 隐式产生的；它由 `add_conditional_edges("agent", should_continue, {"tools": "tools", ...})` 单独定义。模型看到的消息序列概念上类似：
+
+```text
+AIMessage(tool_calls=[search_memory(query="老周")])
+ToolMessage(name="search_memory", tool_call_id="...",
+                        content="没有找到与查询相关的长期记忆。")
+AIMessage(content="...")
+```
+
+`ToolMessage` 保留 `tool_call_id`，用于对应前一条 AI 消息发起的工具调用。图的 `tools -> agent` 边使下一轮模型调用发生；代码不需要在工具函数里再次手动调用 LLM。
 
 ### 核心代码
 
