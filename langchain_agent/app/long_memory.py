@@ -20,12 +20,8 @@ from langgraph.store.base import BaseStore, IndexConfig
 from langgraph.store.memory import InMemoryStore
 from typing_extensions import Annotated
 
-try:
-    from . import config as app_config
-    from .long_memory_prompts import MEMORY_EXTRACTION_PROMPT, MemoryExtraction
-except ImportError:  # pragma: no cover - supports direct app/ test execution
-    from app import config as app_config
-    from app.long_memory_prompts import MEMORY_EXTRACTION_PROMPT, MemoryExtraction
+from . import config as app_config
+from .long_memory_prompts import MEMORY_EXTRACTION_PROMPT, MemoryExtraction
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +69,9 @@ def retrieve_user_memories(
     user_id: str,
     query: str,
     top_k: int = 3,
+    raise_on_error: bool = False,
 ) -> List[str]:
-    """Semantic search inside one user's namespace; returns memory contents."""
+    """Search one user's namespace; optionally propagate Store errors to tools."""
     namespace = get_user_memory_namespace(user_id)
     try:
         items = store.search(namespace, query=query, limit=top_k)
@@ -85,6 +82,8 @@ def retrieve_user_memories(
             top_k,
             exc_info=True,
         )
+        if raise_on_error:
+            raise
         return []
     contents = [
         str(item.value["content"])
@@ -206,23 +205,37 @@ def create_search_memory_tool(default_top_k: int = 3) -> BaseTool:
         ``query`` must be a standalone, semantically complete search phrase
         that makes sense without the surrounding conversation.
         """
-        logger.info("Search the current user's long-term memory.")
-        configurable: Any = (config or {}).get("configurable", {})
-        user_id = configurable.get("user_id")
-        top_k = int(configurable.get("top_k") or default_top_k)
-        if not user_id:
-            logger.warning("memory.longterm.tool.missing_user_id")
-            return "长期记忆当前不可用（缺少用户标识），请直接根据对话内容回答。"
-        memories = retrieve_user_memories(
-            store=store,
-            user_id=user_id,
-            query=query,
-            top_k=top_k,
-        )
-        if not memories:
-            logger.info("memory.longterm.tool.no_memories_found user_id=%s query=%s 没有找到与查询相关的长期记忆。", user_id, query)
-            
-            return "没有找到与查询相关的长期记忆。"
-        return "找到以下相关长期记忆：\n" + "\n".join(f"- {item}" for item in memories)
+        try:
+            logger.info("Search the current user's long-term memory.")
+            configurable: Any = (config or {}).get("configurable", {})
+            user_id = configurable.get("user_id")
+            top_k = int(configurable.get("top_k") or default_top_k)
+            if not user_id:
+                logger.warning("memory.longterm.tool.missing_user_id")
+                return (
+                    "Tool failed: long-term memory is unavailable because "
+                    "user_id is missing. Try a different approach."
+                )
+            memories = retrieve_user_memories(
+                store=store,
+                user_id=user_id,
+                query=query,
+                top_k=top_k,
+                raise_on_error=True,
+            )
+            if not memories:
+                logger.info(
+                    "memory.longterm.tool.no_memories_found user_id=%s query=%s",
+                    user_id,
+                    query,
+                )
+                return "没有找到与查询相关的长期记忆。"
+            return "找到以下相关长期记忆：\n" + "\n".join(
+                f"- {item}" for item in memories
+            )
+        except Exception as exc:  # noqa: BLE001 - tool errors become observations
+            logger.exception("memory.longterm.tool.failed")
+            reason = f"memory search error ({type(exc).__name__})"
+            return f"Tool failed: {reason}. Try a different approach."
 
     return search_memory

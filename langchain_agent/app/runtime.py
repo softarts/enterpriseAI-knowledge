@@ -10,20 +10,20 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.errors import GraphRecursionError
 from langgraph.store.base import BaseStore
 
-try:
-    from . import config as app_config
-    from .graph import build_memory_agent_graph
-    from .long_memory import create_memory_store
-except ImportError:  # pragma: no cover - supports direct app/ test execution
-    from app import config as app_config
-    from app.graph import build_memory_agent_graph
-    from app.long_memory import create_memory_store
+from . import config as app_config
+from .graph import build_memory_agent_graph
+from .long_memory import create_memory_store
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_USER_ID = "default-user"
+GRAPH_RECURSION_LIMIT = 10
+RECURSION_LIMIT_ANSWER = (
+    "这次请求需要过多的工具步骤，已安全停止。请缩小问题范围或拆成几个步骤再试。"
+)
 
 
 @dataclass
@@ -124,16 +124,31 @@ class MemoryRuntime:
             "memory.graph.invoke.start thread_id=%s input_message_count=1",
             thread_id,
         )
-        result = answer_graph.invoke(
-            {"messages": [HumanMessage(content=question)]},
-            config={
-                "configurable": {
-                    "thread_id": thread_id,
-                    "user_id": active_user_id,
-                    "top_k": active_top_k,
-                }
-            },
-        )
+        try:
+            result = answer_graph.invoke(
+                {"messages": [HumanMessage(content=question)]},
+                config={
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "user_id": active_user_id,
+                        "top_k": active_top_k,
+                    },
+                    "metadata": {
+                        "thread_id": thread_id,
+                        "user_id": active_user_id,
+                        "entrypoint": "chat_service.api.chat",
+                    },
+                    "tags": ["chat_service", "api-chat", "tool-agent"],
+                    "recursion_limit": GRAPH_RECURSION_LIMIT,
+                },
+            )
+        except GraphRecursionError:
+            logger.warning(
+                "memory.graph.invoke.recursion_limit thread_id=%s limit=%d",
+                thread_id,
+                GRAPH_RECURSION_LIMIT,
+            )
+            return RECURSION_LIMIT_ANSWER
         result_messages = result.get("messages", [])
         final_message = result_messages[-1]
         answer = getattr(final_message, "content", "")

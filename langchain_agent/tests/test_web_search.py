@@ -62,14 +62,18 @@ class TestWebSearchTool(unittest.TestCase):
 
         result = search.invoke({"query": "  "})
 
-        self.assertIn("查询内容为空", result)
+        self.assertEqual(
+            result,
+            "Tool failed: query must not be empty. Try a different approach.",
+        )
         self.assertEqual(search_tool.call, {})
 
     def test_missing_api_key_returns_clear_tool_result(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             result = create_web_search_tool().invoke({"query": "最新手机芯片"})
 
-        self.assertIn("TAVILY_API_KEY", result)
+        self.assertIn("Tool failed: TAVILY_API_KEY is not configured.", result)
+        self.assertTrue(result.endswith("Try a different approach."))
 
     def test_search_failure_returns_clear_tool_result(self) -> None:
         search = create_web_search_tool(
@@ -78,7 +82,8 @@ class TestWebSearchTool(unittest.TestCase):
 
         result = search.invoke({"query": "latest chip"})
 
-        self.assertIn("网页搜索暂时失败", result)
+        self.assertIn("Tool failed: web search error (RuntimeError).", result)
+        self.assertTrue(result.endswith("Try a different approach."))
 
     def test_default_graph_executes_web_search_then_returns_to_model(self) -> None:
         search_tool = FakeSearchTool(
@@ -106,16 +111,18 @@ class TestWebSearchTool(unittest.TestCase):
                 "args": {"query": "华为 手机芯片 2026"},
             },
         )
-        with patch("app.graph.create_web_search_tool", return_value=web_search):
+        with patch("app.graph.app_config.HITL_ENABLED", False), patch(
+            "app.graph.create_web_search_tool", return_value=web_search
+        ):
             graph = build_memory_agent_graph(
                 llm=llm,
                 checkpointer=MemorySaver(),
                 store=create_test_store(),
             )
-        result = graph.invoke(
-            {"messages": [HumanMessage(content="华为今年推出了什么最新的手机芯片？")]},
-            config={"configurable": {"thread_id": "web-search-test"}},
-        )
+            result = graph.invoke(
+                {"messages": [HumanMessage(content="华为今年推出了什么最新的手机芯片？")]},
+                config={"configurable": {"thread_id": "web-search-test"}},
+            )
 
         self.assertEqual(search_tool.call, {"query": "华为 手机芯片 2026"})
         self.assertIn("https://example.com/chip", result["messages"][-1].content)

@@ -1,5 +1,5 @@
 """
-qa_service.llm_client — LangChain LCEL chain 封装。
+rag_service.llm_client — LangChain LCEL chain 封装。
 
 使用 langchain-openai 的 ChatOpenAI（OpenAI 兼容接口），
 通过环境变量切换 provider（HF Router / LM Studio / 其他）：
@@ -19,7 +19,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from qa_service import config
+from rag_service import config
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +67,6 @@ def _build_llm() -> ChatOpenAI:
         )
         extra_body = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
         logger.info("LLM thinking mode: %s", enable_thinking)
-    # streaming=True 使 token 级回调生效，支撑 /api/chat/stream 的逐字输出；
-    # 对非流式调用方（LCEL chain.invoke）无影响，LangChain 会自动聚合。
     return ChatOpenAI(
         model=config.LLM_MODEL,
         base_url=config.LLM_BASE_URL,
@@ -76,7 +74,6 @@ def _build_llm() -> ChatOpenAI:
         temperature=0,
         max_tokens=config.LLM_MAX_TOKENS,
         extra_body=extra_body,
-        streaming=True,
     )
 
 

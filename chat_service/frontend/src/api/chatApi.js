@@ -45,3 +45,96 @@ export async function askQuestion(question, { signal } = {}) {
 
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Streaming (SSE over POST — EventSource cannot POST, so we parse manually)
+// ---------------------------------------------------------------------------
+
+const STREAM_ENDPOINT = "/api/chat/stream";
+const RESUME_ENDPOINT = "/api/chat/resume";
+const CANCEL_ENDPOINT = "/api/chat/cancel";
+
+/**
+ * Parse an SSE byte stream and dispatch parsed events to `onEvent`.
+ * SSE framing: `data: {json}\n\n`. Multi-line data is concatenated with \n.
+ */
+async function consumeSSE(response, onEvent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Frames are separated by a blank line.
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const payload = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (!payload) continue;
+      try {
+        onEvent(JSON.parse(payload));
+      } catch {
+        // Ignore malformed frames rather than breaking the stream.
+      }
+    }
+  }
+}
+
+/**
+ * Stream one chat turn. `onEvent` receives every protocol event:
+ * token / tool_call / tool_result / node_start / interrupt / done / error.
+ * Resolves when the server closes the stream.
+ */
+export async function askQuestionStream(question, { onEvent, signal, tokenScope = "all" } = {}) {
+  const res = await fetch(STREAM_ENDPOINT, {
+    method: "POST",
+    signal,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Conversation-Id": getConversationId(),
+    },
+    body: JSON.stringify({ question, token_scope: tokenScope }),
+  });
+
+  if (!res.ok || !res.body) {
+    throw new Error(`Stream request failed: ${res.status} ${res.statusText}`);
+  }
+  await consumeSSE(res, onEvent);
+}
+
+/** Resume a turn paused by the HITL gate. `resume` false rejects the tool call. */
+export async function resumeStream(resume, { onEvent, signal, tokenScope = "all" } = {}) {
+  const res = await fetch(RESUME_ENDPOINT, {
+    method: "POST",
+    signal,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Conversation-Id": getConversationId(),
+    },
+    body: JSON.stringify({ resume, token_scope: tokenScope }),
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`Resume request failed: ${res.status} ${res.statusText}`);
+  }
+  await consumeSSE(res, onEvent);
+}
+
+/** Ask the backend to cancel its in-flight graph run for this conversation. */
+export async function cancelStream() {
+  try {
+    await fetch(CANCEL_ENDPOINT, {
+      method: "POST",
+      headers: { "X-Conversation-Id": getConversationId() },
+    });
+  } catch {
+    // Best-effort: the client abort already closed the connection.
+  }
+}

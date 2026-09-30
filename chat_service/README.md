@@ -272,6 +272,7 @@ Browser App.jsx
 |---|---|---|
 | `GET` | `/api/health` | 服务状态和共享 LLM 配置是否完整 |
 | `POST` | `/api/chat` | 纯聊天；需要 `X-Conversation-Id`，返回 answer 和 trace |
+| `POST` | `/api/chat/stream` | SSE 流式聊天（见下文「流式对话」） |
 | `POST` | `/api/documents/import` | 上传并转换、分类，返回 pending |
 | `GET` | `/api/documents/import/{id}` | 查询导入记录 |
 | `POST` | `/api/documents/import/{id}/confirm` | 执行 embedding、Chroma 写入并完成 OKF 入库 |
@@ -283,11 +284,86 @@ LLM 直接使用 `qa_service` 的全局 OpenAI-compatible 配置：`LLM_BASE_URL
 `LLM_MODEL`、`LLM_API_KEY`、`LLM_MAX_TOKENS` 和 `LLM_ENABLE_THINKING`。`/api/health`
 只返回配置完整性布尔值，不返回密钥。
 
+## 流式对话（SSE）
+
+`/api/chat/stream` 以 SSE 推送一次问答的完整过程。因为要带 POST body 和自定义
+header，前端用 `fetch` + `ReadableStream` 手动解析 SSE，而不是 `EventSource`。
+
+```text
+POST /api/chat/stream  {question, token_scope}
+  -> ChatStreamService.stream_turn()
+  -> graph.astream(stream_mode=["custom","messages","updates"])
+  -> StreamEventMapper -> StreamEvent -> "data: {json}\n\n"
+```
+
+### 事件协议
+
+每帧是一个 JSON 对象，`type` 决定前端分流：
+
+```jsonc
+{"type":"token","text":"你好","turn":1}
+{"type":"tool_call","id":"call_1","name":"web_search","args":{"query":"news"}}
+{"type":"tool_result","id":"call_1","name":"web_search","status":"ok","content":"..."}
+{"type":"node_start","node":"agent"}
+{"type":"interrupt","thread_id":"conv-1","question":"即将调用外部工具 web_search，是否继续？","resume_key":"conv-1:call_1","tools":[...]}
+{"type":"done","usage":{"input_tokens":812,"output_tokens":96},"finish_reason":"stop"}
+{"type":"error","message":"...","code":"upstream"}
+```
+
+`finish_reason` 为 `interrupt` 表示本轮因 HITL 暂停（此时 `usage` 为 null）；
+流在 `done` 事件后结束，前端可无条件清除 loading 状态。
+
+### 三路 stream mode 的分工
+
+LangGraph 的 token 有两条限制，因此需要同时消费三个通道：
+
+| 通道 | 提供 | 说明 |
+|---|---|---|
+| `custom` | token、tool_call | 节点内 LLM 的 chunk **不会**冒泡为 `on_chat_model_stream`，只能由 agent 节点用 `get_stream_writer()` 主动写出 |
+| `messages` | node_start | `(message, metadata)` 元组，`metadata["langgraph_node"]` 是节点名 |
+| `updates` | interrupt、tool_result | 节点级 state delta；暂停运行时顶层出现 `__interrupt__` 键 |
+
+`tool_result` 与 `usage` 不在流式载荷里：前者从 `updates` 通道当轮收集的
+`ToolMessage` 生成（不读 checkpoint，避免重发历史轮次的工具结果），后者取自
+`updates` 通道最终 AIMessage 的 `usage_metadata`。
+
+`token_scope`：`all`（默认）立即转发每轮 token；`final` 先缓冲，只有在没发生工具
+调用时才在结束时输出，避免把"决定调工具"那轮的中间文本暴露给用户。
+
+### HITL（人工确认）
+
+`langchain_agent` 图在 `agent` 与 `tools` 之间有 `hitl_gate` 节点，对
+`HITL_TOOLS`（默认 `web_search`）调用 `interrupt()`。默认开启，可用
+`HITL_ENABLED=false` 关闭。
+
+- 首轮流到 `web_search` 时暂停，发送 `interrupt` 事件，**工具不执行**
+- 前端确认后调 `POST /api/chat/resume`（body `{"resume": true|false}`），
+  后端用 `Command(resume=...)` 从同一 checkpoint 的中断点继续，不重复已发出的
+  LLM 调用
+- 中断状态存在 Checkpointer 中；进程重启会丢失（当前为进程内 `MemorySaver`）
+
+### 流式相关 API
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| `POST` | `/api/chat/stream` | SSE 流式一次问答 |
+| `POST` | `/api/chat/resume` | 恢复被 HITL 暂停的一轮 |
+| `POST` | `/api/chat/cancel` | 按 `X-Conversation-Id` 取消服务端正在执行的图任务 |
+
+停止生成是双端的：前端 `AbortController.abort()` 断开连接，后端路由在检测到
+客户端断开或收到 `/api/chat/cancel` 时取消 `asyncio.Task`，立即停止 LLM 调用。
+重新生成只需带同一个 `X-Conversation-Id` 重发 `/api/chat/stream`，历史由
+Checkpointer 恢复。
+
+前端事件分流见 `src/api/chatApi.js`（`askQuestionStream` / `resumeStream` /
+`cancelStream`）与 `src/App.jsx` 的 `handleStreamEvent`：token 追加渲染，
+tool_call/tool_result 渲染成工具卡片，interrupt 弹确认框，done 结束 loading。
+
 后端启动：
 
 ```bash
 # Configure LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY in the environment.
-python -m chat_service.run
+.venv-py314/bin/python -m chat_service.run
 ```
 
 前端启动：
@@ -303,3 +379,7 @@ npm run dev
 taxonomy 仍由 `kb_classifier` 提供，chat_service 不修改 taxonomy 版本、阈值或匹配
 算法。文档导入已接入 embedding 和 ChromaDB；`/api/chat` 使用短期 Checkpointer，
 不执行 RAG。RAG 仍由独立的 `/api/ask` 提供。
+
+流式端点依赖 langchain-core 1.x / langgraph 1.x（`get_stream_writer` 与
+`stream_mode="updates"` 需要 1.x）。仓库运行时已升级到 Python 3.14，
+依赖装在 `.venv-py314`。

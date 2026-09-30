@@ -1,0 +1,139 @@
+"""
+rag_service 配置。
+
+所有值均可通过环境变量覆盖，无需修改代码。
+LLM 相关的三个环境变量（LLM_BASE_URL / LLM_MODEL / LLM_API_KEY）是切换
+provider（HF Router → LM Studio → 其他 OpenAI 兼容端点）的唯一入口。
+
+环境变量一览：
+    QA_TOP_K                 检索返回的 Top-K 数量（默认 5）
+    QA_CONFIDENCE_THRESHOLD  cosine distance 阈值（默认 0.5，见下方注释）
+    QA_EMBEDDING_MODEL       embedding 模型名，与 vector_service collection 对应（默认 bge_m3）
+    LLM_BASE_URL             OpenAI 兼容端点 base_url（如 https://router.huggingface.co/v1）
+    LLM_MODEL                模型 id（如 openai/gpt-oss-120b）
+    LLM_API_KEY              API 密钥（HF 用 HF_TOKEN 的值；本地模型填任意字符串）
+    LLM_MAX_TOKENS           LLM 最大输出 token 数（默认 1024）
+    LLM_ENABLE_THINKING      Qwen3 thinking 模式；默认关闭以保证回答正文有输出
+"""
+
+import os
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# 检索配置
+# ---------------------------------------------------------------------------
+
+# 每次检索返回的最近邻数量（初始值 5，与 vector_service 默认值一致）
+TOP_K: int = int(os.environ.get("QA_TOP_K", "5"))
+
+# 置信度阈值：cosine distance < threshold 才视为"检索到相关内容"并进入生成。
+# cosine distance = 1 - cosine similarity，范围 [0, 2]，越小越相似。
+# ⚠ 初始值 0.5，未经校准，待有评测数据后调整。
+CONFIDENCE_THRESHOLD: float = float(os.environ.get("QA_CONFIDENCE_THRESHOLD", "0.5"))
+
+# embedding 模型名称，必须与写入 ChromaDB 时使用的 collection 对应
+EMBEDDING_MODEL: str = os.environ.get("QA_EMBEDDING_MODEL", "bge_m3")
+
+# ---------------------------------------------------------------------------
+# LLM 配置（全部从环境变量读取，不硬编码）
+# ---------------------------------------------------------------------------
+
+# OpenAI 兼容 base_url；切 LM Studio 只需改此变量，不改代码
+LLM_BASE_URL: str = os.environ.get("LLM_BASE_URL", "")
+
+# 模型 id（HF Router 上用 "openai/gpt-oss-120b"）
+LLM_MODEL: str = os.environ.get("LLM_MODEL", "")
+
+# API 密钥（HF 场景填 HF_TOKEN 的值；本地模型可填任意非空字符串）
+LLM_API_KEY: str = os.environ.get("LLM_API_KEY", "")
+
+# LLM 最大输出 token 数（仅限 completion，不影响 prompt）
+LLM_MAX_TOKENS: int = int(os.environ.get("LLM_MAX_TOKENS", "8192"))
+
+# Qwen3 may spend the entire completion budget on reasoning and return an
+# empty final content.  None means: use the safe default (disabled) for Qwen
+# models, while leaving other OpenAI-compatible models unchanged.
+_thinking_env = os.environ.get("LLM_ENABLE_THINKING")
+LLM_ENABLE_THINKING: Optional[bool] = (
+    None if _thinking_env is None else _thinking_env.strip().lower() in {"1", "true", "yes", "on"}
+)
+
+# Enable/disable markdown rendering in frontend
+ENABLE_MARKDOWN_RENDERING: bool = (
+    os.environ.get("ENABLE_MARKDOWN_RENDERING", "false").strip().lower() in {"1", "true", "yes", "on"}
+)
+
+# ---------------------------------------------------------------------------
+# Reflection 配置
+# ---------------------------------------------------------------------------
+
+# 是否启用 Reflection 评审流程（默认开启；可通过 REFLECTION_ENABLED=false 关闭）
+_reflection_enabled_env = os.environ.get("REFLECTION_ENABLED", "true")
+REFLECTION_ENABLED: bool = (
+    _reflection_enabled_env.strip().lower() in {"1", "true", "yes", "on"}
+)
+
+# 可选独立 Reflection 模型配置；未配置时回退到主 LLM 配置
+REFLECTION_MODEL: str = os.environ.get("REFLECTION_MODEL", "")
+REFLECTION_BASE_URL: str = os.environ.get("REFLECTION_BASE_URL", "")
+REFLECTION_API_KEY: str = os.environ.get("REFLECTION_API_KEY", "")
+
+
+def is_reflection_enabled() -> bool:
+    """判断是否启用 Reflection（优先从当前环境变量读取）。"""
+    env_val = os.environ.get("REFLECTION_ENABLED")
+    if env_val is not None:
+        return env_val.strip().lower() in {"1", "true", "yes", "on"}
+    return REFLECTION_ENABLED
+
+
+def get_reflection_model() -> str:
+    """获取生效的 Reflection 模型名。"""
+    ref_model = os.environ.get("REFLECTION_MODEL", REFLECTION_MODEL)
+    if ref_model:
+        return ref_model
+    return os.environ.get("LLM_MODEL", LLM_MODEL)
+
+
+def get_reflection_base_url() -> str:
+    """获取生效的 Reflection base_url。"""
+    ref_url = os.environ.get("REFLECTION_BASE_URL", REFLECTION_BASE_URL)
+    if ref_url:
+        return ref_url
+    return os.environ.get("LLM_BASE_URL", LLM_BASE_URL)
+
+
+def get_reflection_api_key() -> str:
+    """获取生效的 Reflection API key。"""
+    ref_key = os.environ.get("REFLECTION_API_KEY", REFLECTION_API_KEY)
+    if ref_key:
+        return ref_key
+    return os.environ.get("LLM_API_KEY", LLM_API_KEY)
+
+
+def get_reflection_model_source() -> str:
+    """返回 Reflection 模型的配置来源（供 trace 记录）。"""
+    ref_model = os.environ.get("REFLECTION_MODEL", REFLECTION_MODEL)
+    return "REFLECTION_MODEL" if bool(ref_model) else "LLM_MODEL fallback"
+
+
+# ---------------------------------------------------------------------------
+# LangGraph 编排配置
+# ---------------------------------------------------------------------------
+
+# Reflection ↔ Revision 循环的最大修订次数（critic 最多执行 MAX_REVISION + 1 次）。
+# 达到上限后保留当前答案并结束，防止死循环。
+MAX_REVISION: int = int(os.environ.get("RAG_MAX_REVISION", "2"))
+
+# LangGraph superstep 上限（generate↔tools 与 critic↔revise 两个循环共用一个预算）。
+GRAPH_RECURSION_LIMIT: int = int(os.environ.get("RAG_RECURSION_LIMIT", "25"))
+
+# 检索置信度不足 / 空问题时的统一答复。
+NOT_FOUND_ANSWER: str = "根据现有知识库内容，未能找到与该问题相关的信息。"
+
+# 图执行超出 recursion_limit 时返回给用户的安全答复。
+RECURSION_LIMIT_ANSWER: str = (
+    "这次请求需要过多的处理步骤，已安全停止。请缩小问题范围或拆成几个步骤再试。"
+)
+
+

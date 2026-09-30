@@ -212,8 +212,11 @@ class ChromaStore:
         if dimension is None and collection.count() > 0:
             try:
                 sample = collection.peek(limit=1)
-                embeddings = sample.get("embeddings") or []
-                if embeddings and embeddings[0] is not None:
+                # Chroma returns embeddings as a numpy array; truthiness checks
+                # (`or`, `if arr`) raise ValueError on multi-element arrays, so
+                # test explicitly for None and length instead.
+                embeddings = sample.get("embeddings")
+                if embeddings is not None and len(embeddings) > 0 and embeddings[0] is not None:
                     dimension = len(embeddings[0])
             except Exception:  # stats must remain available across Chroma versions
                 dimension = None

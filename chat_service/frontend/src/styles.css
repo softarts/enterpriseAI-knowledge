@@ -2074,3 +2074,88 @@ body {
   margin: 0.8em 0;
 }
 
+
+/* ---------------------------------------------------------------------------
+   Streaming chat: tool cards and HITL confirmation
+   --------------------------------------------------------------------------- */
+
+.chatwindow__tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.toolcard {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.toolcard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.toolcard__status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.toolcard__status--running {
+  color: #b8860b;
+}
+
+.toolcard__status--error {
+  color: #c0392b;
+}
+
+.toolcard__args,
+.toolcard__content {
+  margin: 8px 0 0;
+  padding: 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.chatwindow__interrupt {
+  border: 1px solid #b8860b;
+  border-radius: 8px;
+  background: rgba(184, 134, 11, 0.08);
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+
+.chatwindow__interrupt p {
+  margin: 0 0 10px;
+}
+
+.chatwindow__interrupt-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.chatwindow__interrupt-actions button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: inherit;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chatwindow__interrupt-actions button:hover {
+  border-color: #b8860b;
+}

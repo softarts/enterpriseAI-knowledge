@@ -22,6 +22,11 @@ MEMORY_EMBEDDING_MODEL: str = os.environ.get("MEMORY_EMBEDDING_MODEL") or "bge_m
 MEMORY_EMBEDDING_DIMS: int = int(os.environ.get("MEMORY_EMBEDDING_DIMS") or "1024")
 MEMORY_TOP_K: int = int(os.environ.get("MEMORY_TOP_K") or "3")
 
+# Human-in-the-loop gate: interrupt before running internet-touching tools.
+HITL_ENABLED: bool = (
+    os.environ.get("HITL_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+)
+
 # Local alias -> HuggingFace model name, aligned with
 # embedding_service/models_registry.py so the memory index and the enterprise KB
 # use the same embedding space.

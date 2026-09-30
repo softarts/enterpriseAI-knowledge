@@ -162,7 +162,7 @@ class TestLongTermMemory(unittest.TestCase):
         )
         final_answer = result["messages"][-1].content
         self.assertIn("根据长期记忆回答", final_answer)
-        self.assertIn("没有找到", final_answer)
+        self.assertIn("Tool failed: memory search error", final_answer)
 
     def test_short_term_history_still_restored_with_store_bound(self) -> None:
         """Checkpointer keeps restoring same-thread history with V2 enabled."""

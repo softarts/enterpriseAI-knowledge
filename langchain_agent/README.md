@@ -7,6 +7,7 @@
 
 - [图结构](#图结构)
 - [Web Search](#web-search)
+- [工具层设计与验证](#工具层设计与验证)
 - [短期记忆的读与写](#短期记忆的读与写)
 - [QA 流程](#qa-流程)
 - [关键实现](#关键实现)
@@ -28,15 +29,40 @@ flowchart TD
     subgraph Graph[已编译的 LangGraph]
         Start([START]) --> Agent[agent 节点]
         Agent --> Cond{有 tool_calls?}
-        Cond -->|是| Tools[tools]
+        Cond -->|是| Gate[hitl_gate<br/>敏感工具需确认]
+        Gate --> Tools[tools]
         Tools --> Agent
         Cond -->|否| Update[update_memory]
         Update --> End([END])
     end
     Checkpointer[(Checkpointer)] -. compile 时绑定到整张图<br/>运行前恢复 / 运行后保存 .-> Graph
+    Store[(Store)] -. update_memory 写入 / search_memory 读取 .-> Graph
 ```
 
-> 上图是 V2 的完整控制流；`tools` / `update_memory` 详见 [长期记忆（V2）](#长期记忆v2long-term-memory)。短期记忆的语义未变：Checkpointer 仍在 compile 时绑定到整张图，按 `thread_id` 恢复并持久化 `messages`。
+> `tools` / `update_memory` 详见 [长期记忆（V2）](#长期记忆v2long-term-memory)。短期记忆的语义未变：Checkpointer 仍在 compile 时绑定到整张图，按 `thread_id` 恢复并持久化 `messages`。
+
+### HITL 节点（hitl_gate）
+
+`agent` 与 `tools` 之间的 `hitl_gate` 节点对 `HITL_TOOLS`（默认 `web_search`，
+即会访问外网的工具）调用 LangGraph 的 `interrupt()`：
+
+- 未命中敏感工具 → 直接返回 `{}`，不打断工具循环
+- 命中 → 抛出中断，抛出前**工具尚未执行**；状态由 Checkpointer 保存
+- 恢复时用 `Command(resume=True/False)` 从中断点继续，不重复已发出的 LLM 调用
+
+默认开启，`HITL_ENABLED=false` 可关闭（测试与非交互式部署用）。前端交互见
+[chat_service 流式对话](../chat_service/README.md#流式对话sse)。
+
+### 流式执行（streaming=True）
+
+`build_memory_agent_graph(streaming=True)` 会把 `agent` 换成异步节点
+`create_async_agent_node`，它用 `astream` 逐 chunk 读 LLM，并通过 LangGraph 的
+`get_stream_writer()` 把每个 chunk 写成 custom 流事件。节点同时把 chunk 聚合成
+一个 AIMessage 返回，所以状态语义与同步节点完全一致。
+
+> 为什么不用 `astream_events`：实测节点内部 LLM 的 chunk **不会**冒泡为
+> `on_chat_model_stream`——LangGraph 只在节点结束时发一次含聚合结果的
+> `on_chain_stream`。custom 流是唯一可靠的 token 通道，且需要 langgraph 1.x。
 
 **图的控制流只有一个入口：`START`。** `answer_graph.invoke(...)` 是调用者启动图执行的 API；图启动后从 `START` 按边进入 `agent`。Checkpointer 不是第二个入口，也不是图节点或连到 Agent 的另一条执行边。它在 `workflow.compile(checkpointer=...)` 时绑定到整张已编译图，LangGraph 根据 invoke config 中的 `thread_id` 在执行前恢复状态，并在执行过程中/结束时持久化状态。
 
@@ -51,7 +77,7 @@ POST /api/chat
     -> MemoryRuntime.generate_answer_with_memory()
              -> build_memory_agent_graph(llm, checkpointer, system_prompt, store)
                         -> StateGraph(MemoryGraphState)
-                        -> add_node("agent", create_agent_node(..., tools=[search_memory, web_search]))
+                        -> add_node("agent", create_agent_node(..., tools=[search_memory, web_search, calculator, get_current_time]))
                         -> add_node("tools", ToolNode(...))
                         -> add_node("update_memory", create_update_memory_node(...))
                         -> add_edge(START, "agent")
@@ -177,7 +203,7 @@ messages: Annotated[List[BaseMessage], add_messages]
 
 ## Web Search
 
-Agent 默认可以使用 `web_search` 和 `search_memory` 两个工具。模型根据问题判断是否需要检索；涉及最新发布、新闻或其他可能变化的信息时，可自行生成独立查询，例如 `华为 手机芯片 2026`。LangGraph 的 `ToolNode` 调用 Tavily，并将标题、摘要和来源 URL 作为 `ToolMessage` 回传给模型，模型据此组织回答并附上相关来源链接。网页内容只作为证据，不作为指令。
+Agent 默认可以使用 `search_memory`、`web_search`、`calculator` 和 `get_current_time` 四个工具。模型根据问题判断是否需要调用；涉及最新发布、新闻或其他可能变化的信息时使用 Tavily，精确计算使用 calculator，当前 UTC 时间使用 get_current_time。LangGraph 的 `ToolNode` 将工具结果作为 `ToolMessage` 回传给模型。网页内容只作为证据，不作为指令。
 
 `web_search` 由 `langchain-tavily` 的 `TavilySearch` 实现，模型只接收 `query` 参数。运行环境需使用 Python 3.10 或更高版本，并通过环境变量配置 Tavily API key：
 
@@ -186,6 +212,92 @@ $env:TAVILY_API_KEY = "your-tavily-api-key"
 ```
 
 未配置 key、请求失败或没有结果时，工具会返回可读状态；Agent 不应虚构搜索结果或来源。搜索结果包含标题、摘要和 URL，最终回答应链接相关来源。
+
+## 工具层设计与验证
+
+完整的三个工具和一个最小 ReAct 图放在单文件 `langchain_agent/app/tool_layer.py`，该文件也能单独运行。`langchain_agent/app/graph.py` 从中导入同一组工具，供 `chat_service/api/chat` 使用；生产图还保留 `search_memory`。
+
+安装本模块依赖（Tavily 当前依赖 Python 3.10+）：
+
+```bash
+python -m pip install -r langchain_agent/requirements.txt
+```
+
+配置兼容 OpenAI 的模型、Tavily 与 LangSmith，然后运行四个实时模型案例：
+
+```bash
+export LLM_API_KEY="..."
+export LLM_BASE_URL="https://your-openai-compatible-endpoint/v1"  # 可选
+export LLM_MODEL="your-model-name"
+export TAVILY_API_KEY="..."
+export LANGCHAIN_TRACING_V2="true"
+export LANGCHAIN_API_KEY="..."
+export LANGCHAIN_PROJECT="enterprise-ai-chat-tools"
+
+python langchain_agent/app/tool_layer.py
+```
+
+`LANGCHAIN_API_KEY` 使用 LangSmith API key，不是模型 API key；不要把真实密钥提交到仓库。`LANGCHAIN_PROJECT` 不存在时 LangSmith 会创建项目或使用默认项目，建议固定项目名以便筛选。
+
+### 任务 1：互补工具与 ReAct 多轮
+
+`calculator(expression)` 用受限 AST 解释器，只接受数字、括号、正负号和 `+ - * / // % **`；不调用 Python `eval`。幂指数绝对值最多 100，结果绝对值最多 `1e100`。`get_current_time()` 返回带 UTC offset 的 ISO 8601 时间。`web_search(query)` 只查当前/近期外部信息，最多返回 2000 字符。三个工具的完整 docstring 和实现均在 `tool_layer.py`。
+
+四个在线验证问题及预期调用序列：
+
+| 案例 | 输入 | 预期工具调用 | 验收重点 |
+| --- | --- | --- | --- |
+| a | `现在几点` | `get_current_time` | 只调用时间工具，不调用搜索或计算器 |
+| b | `2 的 30 次方` | `calculator` | 入参为 `2**30`，结果为 `1073741824`，模型不自行心算 |
+| c | `今天 OpenAI 有什么新闻` | `web_search` | 只搜索当前新闻，回答引用结果来源 |
+| d | `先搜一下 NVDA 的最新股价，再算一下如果涨 15% 是多少` | `web_search` → `calculator` | 先拿到搜索结果中的价格，再把价格代入计算表达式 |
+
+运行确定性图循环测试：
+
+```bash
+python -m unittest langchain_agent.tests.test_tool_layer langchain_agent.tests.test_web_search -v
+```
+
+这些测试用脚本化模型固定上述工具选择，验证工具消息确实回到下一轮模型输入；它们不声称能够证明在线 LLM 每次都作出相同选择。在线运行时检查表中的实际调用序列，若选择不同，先检查 tool call 的名字、参数和模型输出，再调整 description/system prompt。
+
+**我该验证什么：** a/b/c 各只有一个预期工具调用；d 中 `web_search` 的 `ToolMessage` 先出现，下一轮模型输入包含它，随后 `calculator` 的入参基于搜索所得价格。工具调用完成后应有最终 assistant 答复。
+
+### 任务 2：失败处理、输出边界与 docstring
+
+三个工具都捕获内部异常并返回 `Tool failed: {reason}. Try a different approach.`；这是普通工具 observation，LangGraph 的工具节点可继续运行。计算器对非法语法、除零、代码执行语法、过大表达式和过大数值均返回明确失败 observation。Web Search 将输出限制在 2000 字符以内，并在截断时追加 `...[truncated]`。现有 `search_memory` 工具也会把未预期异常转成同一错误格式。
+
+工具 docstring checklist：
+
+- 用一句话说明工具的单一职责，避免与其他工具职责重叠。
+- 明确每个参数的含义、格式、单位和约束；不要让模型猜参数格式。
+- 说明返回内容的结构、单位、时间基准和来源；错误返回也要可识别。
+- 明确何时必须调用、何时不该调用，尤其标出与相邻工具的分工。
+- 说明数据新鲜度、安全边界和不能保证的事情；不要承诺工具做不到的操作。
+- 描述应短而具体，并与真实实现、参数 schema 和失败行为一致。
+
+**我该验证什么：** `2**30` 返回 `1073741824`；`1/0` 和 `__import__('os')` 返回统一失败格式且不执行代码；模拟 Tavily 异常时同样返回 observation；生成超过 2000 字符的搜索结果必须被截断。LangGraph 应继续到下一次 Agent 调用，而不是抛出工具异常。
+
+### 任务 3：LangSmith 与递归上限
+
+`MemoryRuntime.generate_answer_with_memory()` 的 `graph.invoke` config 会附加 `metadata.thread_id`、`metadata.user_id`、`metadata.entrypoint`，并带 `chat_service`、`api-chat`、`tool-agent` tags。`recursion_limit=10` 限制 agent/tool 循环；捕获 `GraphRecursionError` 后 runtime 返回可读答复并记录 warning，不把异常继续抛到 API。
+
+LangSmith 通过环境变量启用 tracing：
+
+```bash
+export LANGCHAIN_TRACING_V2="true"
+export LANGCHAIN_API_KEY="lsv2_..."
+export LANGCHAIN_PROJECT="enterprise-ai-chat-tools"
+```
+
+在 LangSmith 中打开对应 project 和一次 `/api/chat` trace，检查：
+
+- 根 run 的 `metadata.thread_id`、`metadata.entrypoint` 和 `tags`，确认可按会话及 API 入口筛选。
+- `agent` / chat model run 的输入 messages、模型输出里的 `tool_calls[].name` 与 `tool_calls[].args`。
+- 子级 tool run 的 `name`、输入参数、输出 observation；特别检查 `web_search` 是否不超过 2000 字符，以及 calculator 收到的表达式是否使用了搜索价格。
+- run tree 的父子关系和顺序；案例 d 应为 `web_search` 子 run 后接 `calculator` 子 run，再回到模型生成最终答复。
+- 每个 run 的状态、错误、耗时；强制制造工具循环时，应在 recursion limit 处停止并返回可读答复，而不是形成无穷调用。
+
+**我该验证什么：** 跑完四个在线案例后，逐个核对 model run 的 tool calls 与 tool 子 run 输入/输出；在案例 d 验证两种工具按顺序串行执行。metadata/tags 能在项目里定位对应 trace；循环超限时 `/api/chat` 返回正常响应体，其中 answer 是安全停止提示。
 
 ## 关键实现
 
@@ -574,7 +686,7 @@ that makes sense without the surrounding conversation.
 | 触发者 | LLM 自主选择调用 `search_memory` | `update_memory` 节点固定执行 |
 | 判定方式 | 是否返回 `tool_calls` | `with_structured_output` 得到 `should_store: bool` |
 | 判定依据 | docstring `description`（发给模型的文本） | `MEMORY_EXTRACTION_PROMPT` + `MemoryExtraction` schema |
-| 失败降级 | 检索为空时返回中文提示文本 | 异常只记日志，不中断已完成的回答 |
+| 失败降级 | 检索为空时返回中文提示；Store 异常返回 `Tool failed: ...` | 异常只记日志，不中断已完成的回答 |
 
 判定 schema 见 `app/long_memory_prompts.py:12`（`should_store` 的 `Field(description=...)` 同样是对模型的语义约束）。
 
@@ -589,7 +701,7 @@ that makes sense without the surrounding conversation.
 active_tools: List[BaseTool] = (
     list(tools)
     if tools is not None
-    else [search_memory, web_search]
+    else [search_memory, web_search, calculator, get_current_time]
 )
 ```
 
@@ -597,11 +709,11 @@ active_tools: List[BaseTool] = (
 
 | 传入 `tools` | 结果 | 说明 |
 | --- | --- | --- |
-| `None`（默认，线上路径） | `[search_memory, web_search]` | 自动创建长期记忆与 Tavily 网页搜索工具 |
+| `None`（默认，线上路径） | `[search_memory, web_search, calculator, get_current_time]` | 自动创建长期记忆、Tavily 网页搜索、计算器和 UTC 时间工具 |
 | `[]`（空列表） | `[]` | **被显式尊重**，不绑定任何工具；`agent` 退化为纯对话，图结构仍然包含 `tools` 节点但永不可达 |
 | `[my_tool, ...]` | 原样使用 | 替换默认工具集，`ToolNode` 只执行这里传入的工具 |
 
-因为条件写的是 `is not None`，显式传 `[]` 才能表达「不要工具」；`None` 代表默认启用 `search_memory` 与 `web_search`。
+因为条件写的是 `is not None`，显式传 `[]` 才能表达「不要工具」；`None` 代表启用默认的四个工具。
 
 **第 2 步：工具对象本体。** `create_search_memory_tool()`（`app/long_memory.py:186`）是一个**工厂函数**：内部定义一个被 `@tool` 装饰的嵌套函数并返回它。工具的 `name` 来自内层函数名（`search_memory`），`description` 来自它的 docstring——这两者就是模型做决策时看到的全部说明文字。因为是工厂而非模块级常量，每次构图都会得到一个新的工具实例，闭包捕获本次的 `default_top_k`。
 

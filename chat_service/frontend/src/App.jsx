@@ -5,7 +5,7 @@ import AskWindow from "./components/AskWindow.jsx";
 import ImportPage from "./components/ImportPage.jsx";
 import BrowsePage from "./components/BrowsePage.jsx";
 import TaskPage from "./components/TaskPage.jsx";
-import { askQuestion } from "./api/chatApi.js";
+import { askQuestionStream, cancelStream, resumeStream } from "./api/chatApi.js";
 import { askWithRAG } from "./api/askApi.js";
 
 // Top-level state: active view, messages, loading, trace, pane collapse.
@@ -20,6 +20,12 @@ export default function App() {
   const [askTrace, setAskTrace] = useState(null);
   const chatRequestRef = useRef(null);
 
+  // Streaming state: the in-flight assistant message index, tool cards and
+  // any pending HITL confirmation.
+  const [toolCards, setToolCards] = useState([]);
+  const [pendingInterrupt, setPendingInterrupt] = useState(null);
+  const streamingIndexRef = useRef(null);
+
   // Ask (RAG) — independent state so switching views preserves history
   const [askMessages, setAskMessages] = useState([]);
   const [askLoading, setAskLoading] = useState(false);
@@ -27,39 +33,95 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [traceCollapsed, setTraceCollapsed] = useState(false);
 
+  // Append streamed text to the assistant message being built.
+  function appendToStreaming(text) {
+    const index = streamingIndexRef.current;
+    if (index == null) return;
+    setMessages((prev) =>
+      prev.map((m, i) => (i === index ? { ...m, content: m.content + text } : m))
+    );
+  }
+
+  function handleStreamEvent(event) {
+    switch (event.type) {
+      case "token":
+        appendToStreaming(event.text || "");
+        break;
+      case "node_start":
+        break; // reserved for step indicators
+      case "tool_call":
+        setToolCards((prev) => [
+          ...prev,
+          { id: event.id, name: event.name, args: event.args, status: "running" },
+        ]);
+        break;
+      case "tool_result":
+        setToolCards((prev) =>
+          prev.map((card) =>
+            card.id === event.id
+              ? { ...card, status: event.status, content: event.content }
+              : card
+          )
+        );
+        break;
+      case "interrupt":
+        setPendingInterrupt({
+          question: event.question,
+          resumeKey: event.resume_key,
+          threadId: event.thread_id,
+        });
+        setLoading(false);
+        break;
+      case "error":
+        setMessages((prev) => [
+          ...prev,
+          { role: "error", content: event.message || "Stream error" },
+        ]);
+        break;
+      case "done":
+        setLoading(false);
+        break;
+      default:
+        break;
+    }
+  }
+
   async function handleSend(question) {
     const controller = new AbortController();
     chatRequestRef.current = controller;
-    setMessages((prev) => [...prev, { role: "user", content: question }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: question },
+      { role: "assistant", content: "" },
+    ]);
+    // The assistant placeholder is the last message.
+    streamingIndexRef.current = null;
     setLoading(true);
+    setToolCards([]);
+    setPendingInterrupt(null);
+
+    // Resolve the placeholder index after the state update is queued.
+    const placeholderIndex = messages.length + 1;
+    streamingIndexRef.current = placeholderIndex;
 
     try {
-      const data = await askQuestion(question, { signal: controller.signal });
-
-      // Always show the trace, even for backend-reported errors.
-      setTrace(data.trace || null);
-
-      if (data.error) {
-        setMessages((prev) => [
-          ...prev,
-          { role: "error", content: data.error },
-        ]);
+      await askQuestionStream(question, {
+        signal: controller.signal,
+        onEvent: handleStreamEvent,
+      });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        appendToStreaming("\n[已停止]");
       } else {
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: data.answer || "(empty answer)" },
+          { role: "error", content: err.message || "Stream failed." },
         ]);
       }
-    } catch (err) {
-      if (err.name === "AbortError") return;
-      // Network / transport level failure (backend down, etc.).
-      setMessages((prev) => [
-        ...prev,
-        { role: "error", content: err.message || "Request failed." },
-      ]);
     } finally {
       if (chatRequestRef.current === controller) {
         chatRequestRef.current = null;
+        streamingIndexRef.current = null;
         setLoading(false);
       }
     }
@@ -67,10 +129,39 @@ export default function App() {
 
   function handleStopChat() {
     const controller = chatRequestRef.current;
-    if (!controller) return;
-    chatRequestRef.current = null;
-    controller.abort();
+    if (controller) {
+      chatRequestRef.current = null;
+      controller.abort();
+      // Also stop the server-side graph run.
+      cancelStream();
+    }
     setLoading(false);
+    streamingIndexRef.current = null;
+  }
+
+  async function handleInterruptConfirm(resume) {
+    setPendingInterrupt(null);
+    setLoading(true);
+    const controller = new AbortController();
+    chatRequestRef.current = controller;
+    try {
+      await resumeStream(resume, {
+        signal: controller.signal,
+        onEvent: handleStreamEvent,
+      });
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        setMessages((prev) => [
+          ...prev,
+          { role: "error", content: err.message || "Resume failed." },
+        ]);
+      }
+    } finally {
+      if (chatRequestRef.current === controller) {
+        chatRequestRef.current = null;
+        setLoading(false);
+      }
+    }
   }
 
   async function handleAskSend(question) {
@@ -124,6 +215,9 @@ export default function App() {
           loading={loading}
           onSend={handleSend}
           onStop={handleStopChat}
+          toolCards={toolCards}
+          pendingInterrupt={pendingInterrupt}
+          onInterruptConfirm={handleInterruptConfirm}
         />
       ) : activeView === "ask" ? (
         <AskWindow messages={askMessages} loading={askLoading} onSend={handleAskSend} />
