@@ -11,8 +11,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from chat_service.api import routes_chat
 from chat_service.services.chat.chat_service import ChatService
 from langchain_core.messages import BaseMessage
-from langchain_memory.app.runtime import MemoryRuntime
-from langchain_memory.tests.test_helpers import DeterministicMockChatModel
+from langchain_agent.app.runtime import MemoryRuntime
+from langchain_agent.tests.test_helpers import DeterministicMockChatModel
 
 
 class RecordingMemoryRuntime:

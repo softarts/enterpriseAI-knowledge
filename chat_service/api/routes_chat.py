@@ -13,7 +13,7 @@ from fastapi import APIRouter, Header
 from chat_service.services.chat.config import settings
 from chat_service.services.chat.models import ChatRequest, ChatResponse
 from chat_service.services.chat.chat_service import ChatService
-from langchain_memory.app.runtime import create_memory_runtime
+from langchain_agent.app.runtime import create_memory_runtime
 from qa_service import config as qa_config
 
 router = APIRouter()

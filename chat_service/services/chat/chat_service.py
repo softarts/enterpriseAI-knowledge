@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from chat_service.trace import TraceBuilder
-from langchain_memory.app.runtime import MemoryRuntime
+from langchain_agent.app.runtime import MemoryRuntime
 from qa_service import config as qa_config
 from qa_service import llm_client
 
