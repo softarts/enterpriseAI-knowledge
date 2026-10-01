@@ -27,6 +27,21 @@ HITL_ENABLED: bool = (
     os.environ.get("HITL_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 )
 
+# Auto-execute web_search without a human-in-the-loop confirmation. On by
+# default; set to false to restore the manual confirm-before-search prompt.
+WEB_SEARCH_AUTO_EXECUTE: bool = (
+    os.environ.get("WEB_SEARCH_AUTO_EXECUTE", "true").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+
+# Hard ceiling on agent graph steps per turn (mirrors "max requests" caps in
+# tools like the Copilot VS Code extension) — prevents a runaway tool-call
+# loop from hanging a request indefinitely. Separate knobs because the sync
+# (/api/chat) and streaming (/api/chat/stream) entry points have different
+# latency budgets.
+AGENT_MAX_STEPS_SYNC: int = int(os.environ.get("AGENT_MAX_STEPS_SYNC", "10"))
+AGENT_MAX_STEPS_STREAM: int = int(os.environ.get("AGENT_MAX_STEPS_STREAM", "25"))
+
 # Local alias -> HuggingFace model name, aligned with
 # embedding_service/models_registry.py so the memory index and the enterprise KB
 # use the same embedding space.

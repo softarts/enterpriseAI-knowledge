@@ -33,12 +33,13 @@ from chat_service.services.chat.stream_events import (
     StreamEvent,
     StreamEventMapper,
 )
+from langchain_agent.app import config as app_config
 from langchain_agent.app.graph import build_memory_agent_graph
 from qa_service import llm_client
 
 logger = logging.getLogger(__name__)
 
-RECURSION_LIMIT = 25
+RECURSION_LIMIT = app_config.AGENT_MAX_STEPS_STREAM
 STREAM_MODES = ["custom", "messages", "updates"]
 
 

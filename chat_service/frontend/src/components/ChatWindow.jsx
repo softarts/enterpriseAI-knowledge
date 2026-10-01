@@ -9,7 +9,6 @@ export default function ChatWindow({
   loading,
   onSend,
   onStop,
-  toolCards = [],
   pendingInterrupt = null,
   onInterruptConfirm,
 }) {
@@ -17,7 +16,7 @@ export default function ChatWindow({
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading, toolCards]);
+  }, [messages, loading]);
 
   // Hide the typing indicator once the streaming assistant message has text.
   const streamingHasText = messages.length > 0 && messages[messages.length - 1]?.content;
@@ -48,25 +47,6 @@ export default function ChatWindow({
               <span />
               <span />
             </div>
-          </div>
-        )}
-
-        {toolCards.length > 0 && (
-          <div className="chatwindow__tools">
-            {toolCards.map((card) => (
-              <div key={card.id} className="toolcard">
-                <div className="toolcard__head">
-                  <code>{card.name}</code>
-                  <span className={`toolcard__status toolcard__status--${card.status}`}>
-                    {card.status}
-                  </span>
-                </div>
-                <pre className="toolcard__args">{JSON.stringify(card.args, null, 2)}</pre>
-                {card.content && (
-                  <pre className="toolcard__content">{card.content.slice(0, 2000)}</pre>
-                )}
-              </div>
-            ))}
           </div>
         )}
 

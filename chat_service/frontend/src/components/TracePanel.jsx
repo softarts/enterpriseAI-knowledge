@@ -171,14 +171,18 @@ export default function TracePanel({ collapsed, onToggle, trace, onDividerMouseD
           {trace && (
             <>
               <div className="tracepanel__meta">
-                <div>
-                  <span className="tracepanel__k">trace_id</span>
-                  <span className="tracepanel__v">{trace.trace_id}</span>
-                </div>
-                <div>
-                  <span className="tracepanel__k">duration</span>
-                  <span className="tracepanel__v">{trace.duration_ms} ms</span>
-                </div>
+                {trace.trace_id != null && (
+                  <div>
+                    <span className="tracepanel__k">trace_id</span>
+                    <span className="tracepanel__v">{trace.trace_id}</span>
+                  </div>
+                )}
+                {trace.duration_ms != null && (
+                  <div>
+                    <span className="tracepanel__k">duration</span>
+                    <span className="tracepanel__v">{trace.duration_ms} ms</span>
+                  </div>
+                )}
                 <div>
                   <span className="tracepanel__k">steps</span>
                   <span className="tracepanel__v">{steps.length}</span>

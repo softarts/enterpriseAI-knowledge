@@ -1019,6 +1019,9 @@ body {
 .trace-step--error .trace-step__status {
   color: #ff7b86;
 }
+.trace-step--running .trace-step__status {
+  color: #b8860b;
+}
 .trace-step--error {
   border-color: var(--error-border);
 }

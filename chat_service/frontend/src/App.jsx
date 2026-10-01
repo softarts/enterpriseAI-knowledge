@@ -16,7 +16,6 @@ export default function App() {
 
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [trace, setTrace] = useState(null);
   const [askTrace, setAskTrace] = useState(null);
   const chatRequestRef = useRef(null);
 
@@ -198,13 +197,34 @@ export default function App() {
     }
   }
 
+  // Tool call/result activity is shown in the Trace panel, not inline in the
+  // chat window — the chat window should only show the final answer.
+  const chatTrace =
+    toolCards.length > 0
+      ? {
+          steps: toolCards.map((card) => ({
+            name: card.name,
+            status:
+              card.status === "running"
+                ? "running"
+                : card.status === "error"
+                ? "error"
+                : "ok",
+            detail: {
+              args: card.args,
+              ...(card.content ? { result: card.content.slice(0, 2000) } : {}),
+            },
+          })),
+        }
+      : null;
+
   return (
     <Layout
       sidebarCollapsed={sidebarCollapsed}
       onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
       traceCollapsed={traceCollapsed}
       onToggleTrace={() => setTraceCollapsed((v) => !v)}
-      trace={activeView === "ask" ? askTrace : trace}
+      trace={activeView === "ask" ? askTrace : activeView === "chat" ? chatTrace : null}
       activeView={activeView}
       onViewChange={setActiveView}
       showTrace={activeView === "chat" || activeView === "ask"}
@@ -215,7 +235,6 @@ export default function App() {
           loading={loading}
           onSend={handleSend}
           onStop={handleStopChat}
-          toolCards={toolCards}
           pendingInterrupt={pendingInterrupt}
           onInterruptConfirm={handleInterruptConfirm}
         />

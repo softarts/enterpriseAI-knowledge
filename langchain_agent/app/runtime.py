@@ -20,7 +20,7 @@ from .long_memory import create_memory_store
 logger = logging.getLogger(__name__)
 
 DEFAULT_USER_ID = "default-user"
-GRAPH_RECURSION_LIMIT = 10
+GRAPH_RECURSION_LIMIT = app_config.AGENT_MAX_STEPS_SYNC
 RECURSION_LIMIT_ANSWER = (
     "这次请求需要过多的工具步骤，已安全停止。请缩小问题范围或拆成几个步骤再试。"
 )

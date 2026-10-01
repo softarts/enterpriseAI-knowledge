@@ -276,16 +276,30 @@ def should_continue(state: MemoryGraphState) -> str:
 HITL_TOOLS = {"web_search"}
 
 
+def _needs_confirmation(tool_name: str) -> bool:
+    """Whether a tool call must pause for human confirmation.
+
+    ``web_search`` is auto-executed by default (``WEB_SEARCH_AUTO_EXECUTE``);
+    set that switch to false to restore the manual confirm prompt for it.
+    """
+    if tool_name not in HITL_TOOLS:
+        return False
+    if tool_name == "web_search" and app_config.WEB_SEARCH_AUTO_EXECUTE:
+        return False
+    return True
+
+
 def hitl_gate_node(state: MemoryGraphState, config: RunnableConfig) -> Dict[str, Any]:
     """Pause for human confirmation before running sensitive tools.
 
-    Only interrupts when the pending tool call is in ``HITL_TOOLS``; otherwise
-    passes straight through so the agent loop is not slowed down. Resuming the
-    thread with ``Command(resume=...)`` lets the tool run.
+    Only interrupts when the pending tool call is in ``HITL_TOOLS`` and is not
+    exempted by ``_needs_confirmation`` (e.g. auto-executed web_search);
+    otherwise passes straight through so the agent loop is not slowed down.
+    Resuming the thread with ``Command(resume=...)`` lets the tool run.
     """
     last_message = state["messages"][-1]
     tool_calls = getattr(last_message, "tool_calls", None) or []
-    pending = [c for c in tool_calls if c.get("name") in HITL_TOOLS]
+    pending = [c for c in tool_calls if _needs_confirmation(c.get("name"))]
     if not app_config.HITL_ENABLED or not pending:
         return {}
     names = ", ".join(c["name"] for c in pending)

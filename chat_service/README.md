@@ -336,11 +336,33 @@ LangGraph 的 token 有两条限制，因此需要同时消费三个通道：
 `HITL_TOOLS`（默认 `web_search`）调用 `interrupt()`。默认开启，可用
 `HITL_ENABLED=false` 关闭。
 
-- 首轮流到 `web_search` 时暂停，发送 `interrupt` 事件，**工具不执行**
+- 首轮流到 `HITL_TOOLS` 里的工具时暂停，发送 `interrupt` 事件，**工具不执行**
 - 前端确认后调 `POST /api/chat/resume`（body `{"resume": true|false}`），
   后端用 `Command(resume=...)` 从同一 checkpoint 的中断点继续，不重复已发出的
   LLM 调用
 - 中断状态存在 Checkpointer 中；进程重启会丢失（当前为进程内 `MemorySaver`）
+
+`web_search` 默认**自动执行、不弹确认框**（`WEB_SEARCH_AUTO_EXECUTE=true`，
+见 `langchain_agent/app/config.py`）：`hitl_gate_node` 在决定哪些 pending
+tool_call 需要确认时，会对 `name == "web_search"` 且该开关为真的调用直接放行。
+把 `WEB_SEARCH_AUTO_EXECUTE=false` 可以恢复“每次搜索都要手工确认”的旧行为，
+而不影响 `HITL_TOOLS` 里其他工具（如果以后加进去）的确认逻辑。
+
+### Agent 最大步数（防止死循环）
+
+图在 `agent -> hitl_gate -> tools -> agent` 之间循环，直到模型不再请求工具调用。
+如果模型反复用越来越离谱的 query 调同一个工具（例如不断把 `web_search` 的
+`query` 参数越拼越长），图会无限循环下去。两个入口各有一个独立的步数上限，
+超限时 LangGraph 抛 `GraphRecursionError`，由入口捕获并转成友好提示（流式是
+`{"type":"error","code":"recursion_limit"}` SSE 事件，非流式是一句中文提示），
+不会让请求挂起：
+
+| 环境变量 | 默认值 | 作用入口 |
+|---|---|---|
+| `AGENT_MAX_STEPS_SYNC` | `10` | `/api/chat`（`langchain_agent/app/runtime.py` 的 `GRAPH_RECURSION_LIMIT`） |
+| `AGENT_MAX_STEPS_STREAM` | `25` | `/api/chat/stream`（`chat_service/services/chat/chat_stream.py` 的 `RECURSION_LIMIT`） |
+
+类似 Copilot VS Code 插件里对一次请求的最大工具调用轮数做硬性限制。
 
 ### 流式相关 API
 
@@ -356,8 +378,15 @@ LangGraph 的 token 有两条限制，因此需要同时消费三个通道：
 Checkpointer 恢复。
 
 前端事件分流见 `src/api/chatApi.js`（`askQuestionStream` / `resumeStream` /
-`cancelStream`）与 `src/App.jsx` 的 `handleStreamEvent`：token 追加渲染，
-tool_call/tool_result 渲染成工具卡片，interrupt 弹确认框，done 结束 loading。
+`cancelStream`）与 `src/App.jsx` 的 `handleStreamEvent`：token 追加渲染到聊天
+气泡，interrupt 弹确认框，done 结束 loading。
+
+`tool_call`/`tool_result` **不**渲染在聊天窗口里——聊天窗口只显示最终回答
+（以及 error 消息和 HITL 确认框）。这两类事件被收进 `toolCards` 状态，
+`App.jsx` 据此拼出一个 `{steps:[...]}` 形状的 trace 对象传给右侧
+`TracePanel`（和非流式 `/api/chat` 的 `trace` 复用同一个组件/同一套
+`trace-step` 展现逻辑），每个工具调用显示为一个可展开的 step，状态为
+`running`/`ok`/`error`。
 
 后端启动：
 
