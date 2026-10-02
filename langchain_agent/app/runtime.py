@@ -119,6 +119,7 @@ class MemoryRuntime:
             checkpointer=self.checkpointer,
             system_prompt=system_prompt,
             store=store,
+            web_search_max_calls_per_turn=app_config.WEB_SEARCH_MAX_CALLS_PER_TURN,
         )
         logger.info(
             "memory.graph.invoke.start thread_id=%s input_message_count=1",

@@ -42,6 +42,14 @@ WEB_SEARCH_AUTO_EXECUTE: bool = (
 AGENT_MAX_STEPS_SYNC: int = int(os.environ.get("AGENT_MAX_STEPS_SYNC", "10"))
 AGENT_MAX_STEPS_STREAM: int = int(os.environ.get("AGENT_MAX_STEPS_STREAM", "25"))
 
+# Per-turn cap on `web_search` tool calls, enforced as a mechanical hard stop
+# (the model is invoked with no tools bound once exhausted, so it physically
+# cannot keep calling the tool) rather than a prompt/tool-result nudge — see
+# AGENTS.md for why in-context nudges alone are not a reliable guardrail.
+WEB_SEARCH_MAX_CALLS_PER_TURN: int = int(
+    os.environ.get("WEB_SEARCH_MAX_CALLS_PER_TURN", "3")
+)
+
 # Local alias -> HuggingFace model name, aligned with
 # embedding_service/models_registry.py so the memory index and the enterprise KB
 # use the same embedding space.

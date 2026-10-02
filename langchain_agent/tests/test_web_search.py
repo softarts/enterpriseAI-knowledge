@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from typing import Any, Dict
+from typing import Any, Dict, List
 from unittest.mock import patch
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import MemorySaver
 
 _module_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -126,6 +127,94 @@ class TestWebSearchTool(unittest.TestCase):
 
         self.assertEqual(search_tool.call, {"query": "华为 手机芯片 2026"})
         self.assertIn("https://example.com/chip", result["messages"][-1].content)
+
+
+class _AlwaysSearchChatModel(DeterministicMockChatModel):
+    """Always requests ``web_search`` again, no matter how many results it got.
+
+    Simulates the real bug under test: a model that keeps reformulating the
+    query instead of answering. Used only to exercise the hard-stop gate;
+    `_generate` (invoked when no tools are bound, i.e. the gate's forced
+    finalize call, and by `with_structured_output` for `update_memory`)
+    returns a plain text answer instead.
+    """
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Any = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content="已达预算上限，未能确认结果。"))]
+        )
+
+    def bind_tools(self, tools: List[Any], **kwargs: Any) -> Any:
+        class _BoundModel:
+            def invoke(self, messages: List[BaseMessage], config: Any = None, **kw: Any) -> AIMessage:
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "web_search",
+                            "args": {"query": f"query #{len(messages)}"},
+                            "id": f"call_{len(messages)}",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+
+        return _BoundModel()
+
+    @property
+    def _llm_type(self) -> str:
+        return "always-search-mock"
+
+
+class TestSearchBudgetGate(unittest.TestCase):
+    def test_hard_stops_web_search_after_budget_and_forces_text_answer(self) -> None:
+        search_tool = FakeSearchTool(
+            {
+                "results": [
+                    {
+                        "title": "无关结果",
+                        "content": "未能匹配到有效信息。",
+                        "url": "https://example.com/noop",
+                    }
+                ]
+            }
+        )
+        web_search = create_web_search_tool(search_tool=search_tool)
+        llm = _AlwaysSearchChatModel()
+
+        with patch("app.graph.app_config.HITL_ENABLED", False), patch(
+            "app.graph.create_web_search_tool", return_value=web_search
+        ):
+            graph = build_memory_agent_graph(
+                llm=llm,
+                checkpointer=MemorySaver(),
+                store=create_test_store(),
+                web_search_max_calls_per_turn=2,
+            )
+            result = graph.invoke(
+                {"messages": [HumanMessage(content="一个搜不到答案的问题")]},
+                config={
+                    "configurable": {"thread_id": "search-budget-test"},
+                    "recursion_limit": 50,
+                },
+            )
+
+        search_call_count = sum(
+            1
+            for message in result["messages"]
+            if getattr(message, "type", "") == "tool" and message.name == "web_search"
+        )
+        self.assertEqual(search_call_count, 2, "must stop calling web_search at the budget")
+
+        final_message = result["messages"][-1]
+        self.assertEqual(final_message.content, "已达预算上限，未能确认结果。")
+        self.assertFalse(getattr(final_message, "tool_calls", None))
 
 
 if __name__ == "__main__":

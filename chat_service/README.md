@@ -364,6 +364,26 @@ tool_call 需要确认时，会对 `name == "web_search"` 且该开关为真的�
 
 类似 Copilot VS Code 插件里对一次请求的最大工具调用轮数做硬性限制。
 
+### `web_search` 每轮调用预算（防止同一工具反复重试）
+
+`AGENT_MAX_STEPS_*` 限的是整张图的步数，撞线后直接中断并返回错误提示，属于
+“压线崩溃”兜底，不是让模型体面地停下来回答。同一个工具（典型如
+`web_search`）在一轮对话里被反复用稍微变化的 query 调用、却迟迟给不出答案，
+正是这次排查的死循环场景——撞到 `AGENT_MAX_STEPS_*` 之前已经浪费了好几轮。
+
+`WEB_SEARCH_MAX_CALLS_PER_TURN`（默认 `3`，定义在 `langchain_agent/app/config.py`，
+与 `AGENT_MAX_STEPS_*` 在一起）是更细粒度的单工具预算：`search_budget_gate`
+节点（`langchain_agent/app/graph.py`）统计自上一条用户消息以来 `web_search`
+已被调用的次数，一旦达到上限且模型还想再调 `web_search`，就直接用**不绑定任何
+工具**的 LLM 调用强制生成一段文字回答（模型此时物理上发不出 tool_call），
+然后路由到 `update_memory` 结束本轮——不是靠一句“请停止搜索”的提示语指望模型
+自觉配合（这类纯提示型兜底已被证实不可靠，模型会无视提示继续重试），而是机制上
+直接拿掉继续调用的可能性。
+
+| 环境变量 | 默认值 | 作用 |
+|---|---|---|
+| `WEB_SEARCH_MAX_CALLS_PER_TURN` | `3` | 单轮对话内 `web_search` 的最大调用次数，超限后强制无工具终结回答 |
+
 ### 流式相关 API
 
 | 方法 | 路径 | 作用 |

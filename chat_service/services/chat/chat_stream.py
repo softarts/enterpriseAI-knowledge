@@ -40,6 +40,7 @@ from qa_service import llm_client
 logger = logging.getLogger(__name__)
 
 RECURSION_LIMIT = app_config.AGENT_MAX_STEPS_STREAM
+WEB_SEARCH_MAX_CALLS_PER_TURN = app_config.WEB_SEARCH_MAX_CALLS_PER_TURN
 STREAM_MODES = ["custom", "messages", "updates"]
 
 
@@ -131,6 +132,7 @@ class ChatStreamService:
             checkpointer=self._memory_runtime.checkpointer,
             store=self._memory_runtime.get_store(),
             streaming=True,
+            web_search_max_calls_per_turn=WEB_SEARCH_MAX_CALLS_PER_TURN,
         )
 
     def _build_config(self, thread_id: str, user_id: Optional[str]) -> Dict[str, Any]:

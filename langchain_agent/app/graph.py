@@ -18,6 +18,7 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -316,8 +317,74 @@ def hitl_gate_node(state: MemoryGraphState, config: RunnableConfig) -> Dict[str,
 
 
 def route_after_hitl(state: MemoryGraphState) -> str:
-    """After the HITL gate, always continue to the tools node."""
+    """After the HITL gate, always continue to the search budget gate."""
     return "tools"
+
+
+def _count_recent_tool_calls(messages: Sequence[BaseMessage], tool_name: str) -> int:
+    """Count ToolMessages for ``tool_name`` since the most recent HumanMessage."""
+    count = 0
+    for message in reversed(messages[:-1]):
+        if isinstance(message, HumanMessage):
+            break
+        if isinstance(message, ToolMessage) and message.name == tool_name:
+            count += 1
+    return count
+
+
+def create_search_budget_gate_node(llm: BaseChatModel, max_calls_per_turn: int):
+    """Hard-stop ``web_search`` once a turn's call budget is exhausted.
+
+    Unlike ``hitl_gate_node`` (which pauses for confirmation and then still
+    runs the tool), this gate prevents the tool from running at all once the
+    budget is spent: it invokes the LLM with no tools bound, so the model is
+    physically unable to emit another tool_call, and routes straight to
+    ``update_memory``. A nudge alone (a tool-result message asking the model
+    to stop) is not a reliable mechanism — models have been observed to
+    ignore it and keep retrying (see AGENTS.md).
+    """
+
+    def search_budget_gate(
+        state: MemoryGraphState, config: RunnableConfig
+    ) -> Dict[str, Any]:
+        last_message = state["messages"][-1]
+        tool_calls = getattr(last_message, "tool_calls", None) or []
+        if not any(call.get("name") == "web_search" for call in tool_calls):
+            return {}
+
+        search_count = _count_recent_tool_calls(state["messages"], "web_search")
+        if search_count < max_calls_per_turn:
+            return {}
+
+        logger.warning(
+            "search_budget.exhausted thread_id=%s search_count=%d limit=%d",
+            config.get("configurable", {}).get("thread_id"),
+            search_count,
+            max_calls_per_turn,
+        )
+        outbound = [
+            SystemMessage(content=BASE_SYSTEM_PROMPT),
+            SystemMessage(
+                content=(
+                    "No tools are available for this reply. Answer the user "
+                    "now using the information already gathered, and say "
+                    "plainly if something could not be found."
+                )
+            ),
+            *state["messages"],
+        ]
+        forced_answer = llm.invoke(outbound, config=config)
+        return {"messages": [forced_answer]}
+
+    return search_budget_gate
+
+
+def route_after_search_budget_gate(state: MemoryGraphState) -> str:
+    """Continue to tools unless the budget gate forced a final answer."""
+    last_message = state["messages"][-1]
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        return "tools"
+    return "update_memory"
 
 
 def create_update_memory_node(llm: BaseChatModel):
@@ -387,12 +454,15 @@ def build_memory_agent_graph(
     store: Optional[BaseStore] = None,
     tools: Optional[List[BaseTool]] = None,
     streaming: bool = False,
+    web_search_max_calls_per_turn: int = app_config.WEB_SEARCH_MAX_CALLS_PER_TURN,
 ) -> CompiledStateGraph:
     """Build the agent graph with checkpointer (short-term) and store (V2).
 
-    Control flow: START -> agent; agent loops with the tools node while the
-    model requests tool calls; once the model answers, update_memory runs the
-    structured long-term memory extraction, then END.
+    Control flow: START -> agent; agent loops with the tools node (via
+    hitl_gate and search_budget_gate) while the model requests tool calls;
+    once the model answers — or the search_budget_gate forces a final answer
+    after ``web_search_max_calls_per_turn`` is exhausted — update_memory runs
+    the structured long-term memory extraction, then END.
 
     ``streaming=True`` swaps the agent node for its async variant so
     ``astream_events`` surfaces token-level ``on_chat_model_stream`` events.
@@ -423,6 +493,10 @@ def build_memory_agent_graph(
     workflow = StateGraph(MemoryGraphState)
     workflow.add_node("agent", agent_node)
     workflow.add_node("hitl_gate", hitl_gate_node)
+    workflow.add_node(
+        "search_budget_gate",
+        create_search_budget_gate_node(active_llm, web_search_max_calls_per_turn),
+    )
     workflow.add_node("tools", ToolNode(active_tools))
     workflow.add_node("update_memory", create_update_memory_node(active_llm))
     workflow.add_edge(START, "agent")
@@ -431,7 +505,14 @@ def build_memory_agent_graph(
         should_continue,
         {"tools": "hitl_gate", "update_memory": "update_memory"},
     )
-    workflow.add_conditional_edges("hitl_gate", route_after_hitl, {"tools": "tools"})
+    workflow.add_conditional_edges(
+        "hitl_gate", route_after_hitl, {"tools": "search_budget_gate"}
+    )
+    workflow.add_conditional_edges(
+        "search_budget_gate",
+        route_after_search_budget_gate,
+        {"tools": "tools", "update_memory": "update_memory"},
+    )
     workflow.add_edge("tools", "agent")
     workflow.add_edge("update_memory", END)
 
