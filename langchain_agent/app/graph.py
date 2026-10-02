@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import traceback
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -316,11 +317,6 @@ def hitl_gate_node(state: MemoryGraphState, config: RunnableConfig) -> Dict[str,
     return {}
 
 
-def route_after_hitl(state: MemoryGraphState) -> str:
-    """After the HITL gate, always continue to the search budget gate."""
-    return "tools"
-
-
 def _count_recent_tool_calls(messages: Sequence[BaseMessage], tool_name: str) -> int:
     """Count ToolMessages for ``tool_name`` since the most recent HumanMessage."""
     count = 0
@@ -332,59 +328,131 @@ def _count_recent_tool_calls(messages: Sequence[BaseMessage], tool_name: str) ->
     return count
 
 
-def create_search_budget_gate_node(llm: BaseChatModel, max_calls_per_turn: int):
-    """Hard-stop ``web_search`` once a turn's call budget is exhausted.
+# One-off instruction for the forced finalize node (see create_route_after_hitl),
+# appended to BASE_SYSTEM_PROMPT only for that node — not baked into every turn.
+SEARCH_BUDGET_EXHAUSTED_NOTICE = (
+    "No tools are available for this reply because the web_search budget for "
+    "this turn is exhausted. Synthesize a single coherent answer in plain "
+    "natural-language prose from the search results already gathered above "
+    "(the ToolMessage content), and say plainly if something could not be "
+    "confirmed. Do not emit any function-call or tool-call formatted text "
+    "(e.g. <tool_call>, <function=...>, or a JSON tool-call object) — output "
+    "ordinary prose only, even though no tool schema is attached to this call."
+)
 
-    Unlike ``hitl_gate_node`` (which pauses for confirmation and then still
-    runs the tool), this gate prevents the tool from running at all once the
-    budget is spent: it invokes the LLM with no tools bound, so the model is
-    physically unable to emit another tool_call, and routes straight to
-    ``update_memory``. A nudge alone (a tool-result message asking the model
-    to stop) is not a reliable mechanism — models have been observed to
+# Some tool-trained models keep emitting their tool-call syntax as plain text
+# even with no `tools` schema attached to the request, especially once the
+# conversation history is full of prior tool_calls/ToolMessage turns — observed
+# in production as a raw `<tool_call><function=web_search>...` block reaching
+# the user. This is detected and retried once below; _LEAKED_TOOL_CALL_PATTERN
+# covers the formats seen so far.
+_LEAKED_TOOL_CALL_PATTERN = re.compile(
+    r"<tool_call>|<function=|<\|python_tag\|>", re.IGNORECASE
+)
+SEARCH_BUDGET_RETRY_NOTICE = (
+    "Your previous reply contained function/tool-call formatted text, which "
+    "is not allowed here — there is no tool schema attached to this call, so "
+    "it cannot be executed and the user would just see broken syntax. Answer "
+    "again using only ordinary natural-language sentences, with no <tool_call> "
+    "or <function=...> markup of any kind."
+)
+SEARCH_BUDGET_FALLBACK_ANSWER = (
+    "抱歉，多次搜索后仍未能整理出确定的回答，请换个问法或提供更具体的信息再试一次。"
+)
+
+
+def create_force_finalize_node(llm: BaseChatModel):
+    """Sync no-tools finalize node: produces the final answer once
+    ``web_search``'s per-turn budget is spent (see ``create_route_after_hitl``).
+
+    Validates the response isn't leaked tool-call markup (see
+    ``_LEAKED_TOOL_CALL_PATTERN`` above) and retries once with a stronger
+    instruction if it is, falling back to a safe canned answer rather than
+    ever returning raw tool-call syntax to the user.
+    """
+
+    def force_finalize(state: MemoryGraphState, config: RunnableConfig) -> Dict[str, Any]:
+        outbound = [
+            SystemMessage(content=f"{BASE_SYSTEM_PROMPT}\n\n{SEARCH_BUDGET_EXHAUSTED_NOTICE}")
+        ] + list(state["messages"])
+        response = llm.invoke(outbound, config=config)
+        if _LEAKED_TOOL_CALL_PATTERN.search(chunk_text(response)):
+            logger.warning(
+                "force_finalize.leaked_tool_call_syntax thread_id=%s",
+                config.get("configurable", {}).get("thread_id"),
+            )
+            response = llm.invoke(
+                outbound + [SystemMessage(content=SEARCH_BUDGET_RETRY_NOTICE)],
+                config=config,
+            )
+            if _LEAKED_TOOL_CALL_PATTERN.search(chunk_text(response)):
+                response = AIMessage(content=SEARCH_BUDGET_FALLBACK_ANSWER)
+        return {"messages": [response]}
+
+    return force_finalize
+
+
+def create_async_force_finalize_node(llm: BaseChatModel):
+    """Async/streaming variant of ``create_force_finalize_node``.
+
+    Crucially, this buffers the *entire* response and validates it before
+    writing anything to the stream writer. Streaming token-by-token the way
+    the normal agent node does would mean a leaked tool-call block is already
+    on the user's screen by the time validation runs — too late to retry.
+    """
+
+    async def force_finalize(state: MemoryGraphState, config: RunnableConfig) -> Dict[str, Any]:
+        writer = get_stream_writer()
+        outbound = [
+            SystemMessage(content=f"{BASE_SYSTEM_PROMPT}\n\n{SEARCH_BUDGET_EXHAUSTED_NOTICE}")
+        ] + list(state["messages"])
+        response = await llm.ainvoke(outbound, config=config)
+        if _LEAKED_TOOL_CALL_PATTERN.search(chunk_text(response)):
+            logger.warning(
+                "force_finalize.leaked_tool_call_syntax thread_id=%s",
+                config.get("configurable", {}).get("thread_id"),
+            )
+            response = await llm.ainvoke(
+                outbound + [SystemMessage(content=SEARCH_BUDGET_RETRY_NOTICE)],
+                config=config,
+            )
+            if _LEAKED_TOOL_CALL_PATTERN.search(chunk_text(response)):
+                response = AIMessage(content=SEARCH_BUDGET_FALLBACK_ANSWER)
+        writer({"kind": "token", "text": chunk_text(response)})
+        return {"messages": [response]}
+
+    return force_finalize
+
+
+def create_route_after_hitl(max_calls_per_turn: int):
+    """Route to ``tools``, unless the pending ``web_search`` call would exceed
+    the per-turn budget — in which case route to ``force_finalize`` instead.
+
+    This is a **mechanical hard stop**, not a nudge: ``force_finalize`` is a
+    no-tools agent node, so the model is physically unable to keep calling
+    ``web_search`` once routed there. A tool-result message merely asking the
+    model to stop is a documented anti-pattern — models have been observed to
     ignore it and keep retrying (see AGENTS.md).
     """
 
-    def search_budget_gate(
-        state: MemoryGraphState, config: RunnableConfig
-    ) -> Dict[str, Any]:
+    def route_after_hitl(state: MemoryGraphState) -> str:
         last_message = state["messages"][-1]
         tool_calls = getattr(last_message, "tool_calls", None) or []
         if not any(call.get("name") == "web_search" for call in tool_calls):
-            return {}
+            return "tools"
 
         search_count = _count_recent_tool_calls(state["messages"], "web_search")
         if search_count < max_calls_per_turn:
-            return {}
+            return "tools"
 
         logger.warning(
-            "search_budget.exhausted thread_id=%s search_count=%d limit=%d",
-            config.get("configurable", {}).get("thread_id"),
+            "search_budget.exhausted search_count=%d limit=%d",
             search_count,
             max_calls_per_turn,
         )
-        outbound = [
-            SystemMessage(content=BASE_SYSTEM_PROMPT),
-            SystemMessage(
-                content=(
-                    "No tools are available for this reply. Answer the user "
-                    "now using the information already gathered, and say "
-                    "plainly if something could not be found."
-                )
-            ),
-            *state["messages"],
-        ]
-        forced_answer = llm.invoke(outbound, config=config)
-        return {"messages": [forced_answer]}
+        return "force_finalize"
 
-    return search_budget_gate
-
-
-def route_after_search_budget_gate(state: MemoryGraphState) -> str:
-    """Continue to tools unless the budget gate forced a final answer."""
-    last_message = state["messages"][-1]
-    if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        return "tools"
-    return "update_memory"
+    return route_after_hitl
 
 
 def create_update_memory_node(llm: BaseChatModel):
@@ -459,10 +527,12 @@ def build_memory_agent_graph(
     """Build the agent graph with checkpointer (short-term) and store (V2).
 
     Control flow: START -> agent; agent loops with the tools node (via
-    hitl_gate and search_budget_gate) while the model requests tool calls;
-    once the model answers — or the search_budget_gate forces a final answer
-    after ``web_search_max_calls_per_turn`` is exhausted — update_memory runs
-    the structured long-term memory extraction, then END.
+    hitl_gate) while the model requests tool calls. Once
+    ``web_search_max_calls_per_turn`` is exhausted, hitl_gate routes to
+    force_finalize (a no-tools agent node) instead of tools, forcing a final
+    answer; otherwise update_memory runs once the model answers on its own.
+    Either way update_memory runs the structured long-term memory extraction,
+    then END.
 
     ``streaming=True`` swaps the agent node for its async variant so
     ``astream_events`` surfaces token-level ``on_chat_model_stream`` events.
@@ -482,21 +552,22 @@ def build_memory_agent_graph(
         ]
     )
 
-    agent_node = (
-        create_async_agent_node(active_llm, system_prompt=system_prompt, tools=active_tools)
+    node_factory = create_async_agent_node if streaming else create_agent_node
+    agent_node = node_factory(active_llm, system_prompt=system_prompt, tools=active_tools)
+    # No tools bound, so the model is mechanically unable to call `web_search`
+    # again once routed here (see create_route_after_hitl) — and, unlike
+    # `agent`, the response is validated for leaked tool-call-formatted text
+    # before it ever reaches the client (see create_force_finalize_node).
+    force_finalize_node = (
+        create_async_force_finalize_node(active_llm)
         if streaming
-        else create_agent_node(
-            active_llm, system_prompt=system_prompt, tools=active_tools
-        )
+        else create_force_finalize_node(active_llm)
     )
 
     workflow = StateGraph(MemoryGraphState)
     workflow.add_node("agent", agent_node)
     workflow.add_node("hitl_gate", hitl_gate_node)
-    workflow.add_node(
-        "search_budget_gate",
-        create_search_budget_gate_node(active_llm, web_search_max_calls_per_turn),
-    )
+    workflow.add_node("force_finalize", force_finalize_node)
     workflow.add_node("tools", ToolNode(active_tools))
     workflow.add_node("update_memory", create_update_memory_node(active_llm))
     workflow.add_edge(START, "agent")
@@ -506,14 +577,12 @@ def build_memory_agent_graph(
         {"tools": "hitl_gate", "update_memory": "update_memory"},
     )
     workflow.add_conditional_edges(
-        "hitl_gate", route_after_hitl, {"tools": "search_budget_gate"}
-    )
-    workflow.add_conditional_edges(
-        "search_budget_gate",
-        route_after_search_budget_gate,
-        {"tools": "tools", "update_memory": "update_memory"},
+        "hitl_gate",
+        create_route_after_hitl(web_search_max_calls_per_turn),
+        {"tools": "tools", "force_finalize": "force_finalize"},
     )
     workflow.add_edge("tools", "agent")
+    workflow.add_edge("force_finalize", "update_memory")
     workflow.add_edge("update_memory", END)
 
     return workflow.compile(checkpointer=active_checkpointer, store=active_store)

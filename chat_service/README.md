@@ -348,6 +348,42 @@ tool_call 需要确认时，会对 `name == "web_search"` 且该开关为真的�
 把 `WEB_SEARCH_AUTO_EXECUTE=false` 可以恢复“每次搜索都要手工确认”的旧行为，
 而不影响 `HITL_TOOLS` 里其他工具（如果以后加进去）的确认逻辑。
 
+### `should_continue` 路由机制（会不会一直调用工具？）
+
+`should_continue`（`langchain_agent/app/graph.py`）是 `agent` 节点之后的路由函数，
+逻辑是纯语法判断，不涉及任何"调用了几次""该不该继续"的语义：
+
+```python
+def should_continue(state):
+    last_message = state["messages"][-1]
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        return "tools"
+    return "update_memory"
+```
+
+只要这一轮模型返回的 `AIMessage` 带 `tool_calls`（不管是 `web_search`、
+`calculator` 还是 `search_memory`，也不管这是第几次），就无条件路由到
+`tools` 去执行；模型这一轮不带 `tool_calls`（给出纯文本回答），才路由到
+`update_memory` 结束。
+
+这意味着 **如果模型自己反复决定要调用同一个工具，`should_continue` 本身完全不会
+拦截**——它会一直放行，图沿着 `agent -> hitl_gate -> tools -> agent` 这条边
+不断循环，直到下面两道防线之一起作用：
+
+1. **全局步数上限**（见下一节 `AGENT_MAX_STEPS_*`）：不管反复调用的是哪个工具，
+   图的总步数撞线后 LangGraph 直接抛 `GraphRecursionError`，对话被中断、返回
+   错误提示——这是"压线崩溃"式兜底，不会让模型体面地给出回答。
+2. **`web_search` 专属预算**（见下一节 `WEB_SEARCH_MAX_CALLS_PER_TURN`）：
+   `hitl_gate` 之后的 `create_route_after_hitl` 统计本轮 `web_search` 的调用
+   次数，达到上限后不再路由到 `tools`，改路由到 `force_finalize`，模型物理上
+   发不出新的 `web_search` 调用，被迫用已有信息给出文字回答。
+
+**已知局限**：预算机制目前只盯 `web_search` 这一个工具。如果模型反复调用的是
+`calculator`、`search_memory` 等其它工具，`should_continue` 和 `hitl_gate` 都不
+会拦截，只能靠第 1 道全局步数上限兜底（表现为对话被中断而不是正常回答）。按
+`AGENTS.md` 里定的规则，任何会被反复调用的工具都该有自己的硬性预算——目前只
+有 `web_search` 补齐了，其它工具仍是"裸奔"状态，是已知的后续工作项。
+
 ### Agent 最大步数（防止死循环）
 
 图在 `agent -> hitl_gate -> tools -> agent` 之间循环，直到模型不再请求工具调用。
@@ -372,13 +408,33 @@ tool_call 需要确认时，会对 `name == "web_search"` 且该开关为真的�
 正是这次排查的死循环场景——撞到 `AGENT_MAX_STEPS_*` 之前已经浪费了好几轮。
 
 `WEB_SEARCH_MAX_CALLS_PER_TURN`（默认 `3`，定义在 `langchain_agent/app/config.py`，
-与 `AGENT_MAX_STEPS_*` 在一起）是更细粒度的单工具预算：`search_budget_gate`
-节点（`langchain_agent/app/graph.py`）统计自上一条用户消息以来 `web_search`
-已被调用的次数，一旦达到上限且模型还想再调 `web_search`，就直接用**不绑定任何
-工具**的 LLM 调用强制生成一段文字回答（模型此时物理上发不出 tool_call），
-然后路由到 `update_memory` 结束本轮——不是靠一句“请停止搜索”的提示语指望模型
-自觉配合（这类纯提示型兜底已被证实不可靠，模型会无视提示继续重试），而是机制上
-直接拿掉继续调用的可能性。
+与 `AGENT_MAX_STEPS_*` 在一起）是更细粒度的单工具预算：`hitl_gate` 之后的路由函数
+`create_route_after_hitl`（`langchain_agent/app/graph.py`）统计自上一条用户消息
+以来 `web_search` 已被调用的次数，一旦达到上限且模型还想再调 `web_search`，就不再
+路由到 `tools`，而是路由到 `force_finalize`——一个**不绑定任何工具**的节点（模型
+此时物理上发不出结构化的 `tool_call`），然后路由到 `update_memory` 结束本轮。不是
+靠一句"请停止搜索"的提示语指望模型自觉配合（这类纯提示型兜底已被证实不可靠，
+模型会无视提示继续重试），而是机制上直接拿掉继续调用的可能性。
+
+实现 `force_finalize` 时踩过两个坑，都已修掉：
+
+1. **强制回答一度完全不显示**：最初在一个独立节点里同步调用 `llm.invoke()`，
+   生成的文字确实进了最终状态，但从未经过流式 token 通道（`get_stream_writer()`），
+   前端什么都看不到。
+2. **"不绑定工具"不代表模型不会吐工具调用格式的文本**：换用 NVIDIA 托管的模型
+   实测后发现，即使这次请求完全没有带 `tools` schema，模型仍然会把它学到的
+   工具调用语法原样当成普通文本吐出来（例如一整段
+   `<tool_call><function=web_search>...` 直接显示在屏幕上），尤其是当对话历史
+   里已经有大量真实的 tool_calls/ToolMessage 轮次时。
+
+现在 `create_force_finalize_node`（同步）/ `create_async_force_finalize_node`
+（流式）会先完整拿到模型的回复，用 `_LEAKED_TOOL_CALL_PATTERN` 检测是否混入了
+`<tool_call>`/`<function=...>` 这类泄漏的工具调用标记；命中就换一句更强硬的指令
+重试一次；再不行就返回一句固定的道歉文案（`SEARCH_BUDGET_FALLBACK_ANSWER`），
+绝不会把原始的工具调用语法展示给用户。流式场景下这意味着这一步**不是**真正的
+逐字符流式输出——而是先在后端攒齐、校验通过后一次性写入 token 通道——这是为了
+正确性特意做的取舍，只影响这一个"预算耗尽后强制收尾"的节点，正常回答仍然是
+逐字符流式的。
 
 | 环境变量 | 默认值 | 作用 |
 |---|---|---|
