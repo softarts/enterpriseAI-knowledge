@@ -57,6 +57,7 @@ class TraceBuilder:
         detail: Dict[str, Any],
         status: str = "ok",
         duration_ms: Optional[float] = None,
+        kind: str = "local",
     ) -> None:
         """
         Record one pipeline step.
@@ -67,6 +68,10 @@ class TraceBuilder:
             detail: Arbitrary structured detail for this step.
             status: "ok" | "error" | "skipped".
             duration_ms: Optional measured duration for the step.
+            kind: "local" (a function/node span) or "http" (a raw HTTP
+                  request/response attempt to the LLM API) — lets the UI
+                  badge the two differently. Defaults to "local" so existing
+                  callers (request/llm/response) are unaffected.
         """
         self._steps.append(
             {
@@ -74,6 +79,7 @@ class TraceBuilder:
                 "status": status,
                 "detail": detail,
                 "duration_ms": round(duration_ms, 2) if duration_ms is not None else None,
+                "kind": kind,
             }
         )
         # Mirror the detail into a named section for convenient UI access.

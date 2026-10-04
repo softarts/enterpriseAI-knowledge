@@ -9,6 +9,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 import os
 import sys
@@ -39,6 +40,31 @@ class DeterministicMockChatModel(BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> ChatResult:
+        if self.pending_tool_call is not None:
+            # Emit the scripted tool call only on the round that has not seen a
+            # tool result yet, so the agent loop terminates like the real model.
+            has_tool_result = any(
+                getattr(message, "type", "") == "tool" for message in messages
+            )
+            if not has_tool_result:
+                call = dict(self.pending_tool_call)
+                return ChatResult(
+                    generations=[
+                        ChatGeneration(
+                            message=AIMessage(
+                                content="",
+                                tool_calls=[
+                                    {
+                                        "name": call["name"],
+                                        "args": call.get("args", {}),
+                                        "id": call.get("id", "call_1"),
+                                        "type": "tool_call",
+                                    }
+                                ],
+                            )
+                        )
+                    ]
+                )
         text = (
             self.response_generator(messages)
             if self.response_generator is not None
@@ -47,40 +73,45 @@ class DeterministicMockChatModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
 
     def bind_tools(self, tools: List[Any], **kwargs: Any) -> Any:
-        parent = self
-
-        class _BoundModel:
-            def invoke(self, messages: List[BaseMessage], config: Any = None, **kw: Any) -> AIMessage:
-                has_tool_result = any(
-                    getattr(message, "type", "") == "tool" for message in messages
-                )
-                if parent.pending_tool_call and not has_tool_result:
-                    call = dict(parent.pending_tool_call)
-                    return AIMessage(
-                        content="",
-                        tool_calls=[
-                            {
-                                "name": call["name"],
-                                "args": call.get("args", {}),
-                                "id": call.get("id", "call_1"),
-                                "type": "tool_call",
-                            }
-                        ],
-                    )
-                return parent._generate(messages).generations[0].message
-
-        return _BoundModel()
+        # Return a *real* RunnableBinding rather than a hand-rolled wrapper:
+        # the trace handler reads the per-LLM-call payload from LangChain's own
+        # on_chat_model_start / on_llm_end callbacks, which only fire for calls
+        # that go through the Runnable machinery. A plain object with an
+        # `invoke` method (as this mock used to return) bypasses them entirely.
+        return self.bind(
+            tools=[convert_to_openai_tool(tool) for tool in tools],
+            **kwargs,
+        )
 
     def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
         parent = self
 
         class _StructuredRunnable:
+            def _build_default(self, messages: List[BaseMessage]) -> Any:
+                # Schema-agnostic default: reuse whatever _generate() would
+                # have answered in plain text and adapt it to the requested
+                # schema. Tries an `answer`-shaped schema first (e.g.
+                # graph.py's `_FinalAnswer`, used by force_finalize) before
+                # falling back to the long-term-memory extraction shape
+                # (`MemoryExtraction`, used by update_memory) that this mock
+                # originally only supported.
+                text = parent._generate(messages).generations[0].message.content
+                try:
+                    return schema(answer=text)
+                except Exception:
+                    return schema(should_store=False, memory=None)
+
             def invoke(self, messages: List[BaseMessage], config: Any = None, **kw: Any) -> Any:
                 if callable(parent.structured_result):
                     return parent.structured_result(messages)
                 if parent.structured_result is not None:
                     return parent.structured_result
-                return schema(should_store=False, memory=None)
+                return self._build_default(messages)
+
+            async def ainvoke(
+                self, messages: List[BaseMessage], config: Any = None, **kw: Any
+            ) -> Any:
+                return self.invoke(messages, config=config, **kw)
 
         return _StructuredRunnable()
 

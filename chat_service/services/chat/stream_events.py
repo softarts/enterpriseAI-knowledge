@@ -10,10 +10,19 @@ token        {"type":"token","text":str,"turn":int}
 tool_call    {"type":"tool_call","id":str,"name":str,"args":object}
 tool_result  {"type":"tool_result","id":str,"name":str,"status":"ok"|"error","content":str}
 node_start   {"type":"node_start","node":str}
+trace        {"type":"trace","seq":int,"kind":"llm"|"tool"|"http"|"local","name":str,
+              "status":"pending"|"running"|"ok"|"error","detail":object,
+              "duration_ms":float|null,"llm_call_id":str,"tool_call_id":str}
 interrupt    {"type":"interrupt","thread_id":str,"question":str,"resume_key":str,"tools":[...]}
 done         {"type":"done","usage":{"input_tokens":int,"output_tokens":int}|null,
               "finish_reason":"stop"|"interrupt"}
 error        {"type":"error","message":str,"code":str}
+
+A trace event's ``seq`` is its stable index within the turn. LLM calls and
+tool calls are first emitted while still in flight (``status`` ``pending`` /
+``running``) and then re-emitted with the same ``seq`` once finalized with
+their aggregated result and duration — consumers should replace the row they
+already hold for a ``seq``, not append it.
 
 Sources
 -------
@@ -22,6 +31,12 @@ Sources
 ``map_messages`` consumes ``stream_mode="messages"`` state updates, which
                  carry ToolMessages (tool results), node names and the
                  ``__interrupt__`` payload.
+
+``trace`` events are not produced by ``StreamEventMapper`` — they come from
+``langchain_agent.app.call_trace``: one aggregated entry per LLM call and per
+tool call (from the ``LlmTraceHandler`` callbacks), plus the httpx
+request/response attempts and the graph's local node spans. ``chat_stream.py``'s
+``_TraceDrain`` converts them, incrementally, as the run progresses.
 """
 
 from __future__ import annotations
@@ -46,7 +61,18 @@ class StreamEvent:
     data: Dict[str, Any] = field(default_factory=dict)
 
     def to_sse(self) -> str:
-        payload = json.dumps({"type": self.type, **self.data}, ensure_ascii=False)
+        # `default=str` is a deliberate safety net, not laziness: this payload
+        # goes straight onto the wire inside a StreamingResponse, where a
+        # non-serializable value (a UUID run_id, a Decimal, a pydantic model
+        # that slipped into a trace detail) raises TypeError *inside* the ASGI
+        # send path. That aborts the response and leaves the streaming
+        # generator to be finalized from another task, which then trips the
+        # trace_scope ContextVar teardown as well — one bad field turning into
+        # two unrelated-looking tracebacks. Rendering it as a string keeps the
+        # stream alive; diagnostics-only fields should never kill a response.
+        payload = json.dumps(
+            {"type": self.type, **self.data}, ensure_ascii=False, default=str
+        )
         return f"data: {payload}\n\n"
 
 

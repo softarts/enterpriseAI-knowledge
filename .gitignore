@@ -36,3 +36,6 @@ llmclient.py
 *.txt
 !/langchain_agent/requirements.txt
 .venv-py314/
+
+# Runtime log files
+logs/

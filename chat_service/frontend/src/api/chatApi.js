@@ -4,7 +4,9 @@
 const CHAT_ENDPOINT = "/api/chat";
 const CONVERSATION_ID_KEY = "enterprise-ai-chat-conversation-id";
 
-function getConversationId() {
+// Stable per-tab conversation id, shared by every request. Exported so the UI
+// can display which conversation a message or trace row belongs to.
+export function getConversationId() {
   let conversationId = window.sessionStorage.getItem(CONVERSATION_ID_KEY);
   if (!conversationId) {
     conversationId = typeof crypto !== "undefined" && crypto.randomUUID
@@ -12,6 +14,15 @@ function getConversationId() {
       : `conversation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     window.sessionStorage.setItem(CONVERSATION_ID_KEY, conversationId);
   }
+  return conversationId;
+}
+
+/** Start a fresh conversation (new id), leaving the current history in place. */
+export function newConversationId() {
+  const conversationId = typeof crypto !== "undefined" && crypto.randomUUID
+    ? `conversation-${crypto.randomUUID()}`
+    : `conversation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  window.sessionStorage.setItem(CONVERSATION_ID_KEY, conversationId);
   return conversationId;
 }
 

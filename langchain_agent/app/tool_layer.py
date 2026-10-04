@@ -35,6 +35,19 @@ def _tool_failed(reason: str) -> str:
 
 
 def _truncate_tool_output(text: str) -> str:
+    """Shorten tool output to fit the model's context window.
+
+    This is a *model-input* budget, not a trace/debug one: whatever a tool
+    returns goes back into the conversation as a ToolMessage, so an oversized
+    result would eat the context the model needs to answer. 2000 chars is
+    roughly one search result set.
+
+    Note this means the `tool` row in the Trace panel shows the already
+    shortened text — the trace faithfully records what the model actually
+    received, which is the number that matters when reasoning about a bad
+    answer. The untruncated Tavily payload is not retained anywhere; if you
+    need it for debugging, log it inside the tool before this call.
+    """
     if len(text) <= MAX_WEB_SEARCH_CHARS:
         return text
     marker = "...[truncated]"

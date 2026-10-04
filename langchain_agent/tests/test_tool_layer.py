@@ -65,7 +65,7 @@ class ScriptedChatModel:
         if name not in self.available_tools:
             raise AssertionError(f"Model requested unavailable tool: {name}")
 
-    def with_structured_output(self, schema: Any) -> Any:
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
         class StructuredOutput:
             def invoke(self, messages: Any, config: Any = None) -> Any:
                 return schema(should_store=False, memory=None)

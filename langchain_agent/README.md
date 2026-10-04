@@ -14,6 +14,10 @@
 - [隔离与生命周期](#隔离与生命周期)
 - [验证](#验证)
 - [源码索引](#源码索引)
+- [Agent 节点的异步流式执行与 HTTP 跟踪](#agent-节点的异步流式执行与-http-跟踪)
+  - [1. `async def agent` 函数如何被调用](#1-async-def-agent-函数如何被调用)
+  - [2. Call Trace 的初始化与 HTTP 钩子](#2-call-trace-的初始化与-http-钩子)
+  - [3. 完整的 HTTP Payload 记录建议](#3-完整的-http-payload-记录建议)
 - [LangGraph 驱动过程：writer 是什么](#langgraph-驱动过程writer-是什么)
 - [长期记忆（V2）Long-term Memory](#长期记忆v2long-term-memory)
   - [模型怎么决定要不要检索长期记忆](#模型怎么决定要不要检索长期记忆)
@@ -117,12 +121,224 @@ chat.memory.call.completed thread_id=... answer_chars=... duration_ms=...
 
 若 LLM 或图执行失败，会记录 `chat.memory.call.failed`，随后由 chat service 返回带错误信息的响应。日志只记录诊断元数据，避免将用户对话正文写入常规服务日志。
 
-> **调试例外**：`memory.agent.request_payload` 会打印**完整出站请求体**（含 `messages` 全文与 `tools` schema），因此包含用户问题与全部历史，**与上述「不打印对话正文」的约定相反**。它只用于排查模型为何不调用工具，上线前应移除或降级。实现见 `_build_request_payload_preview()`（`app/graph.py:59`）与 `agent` 内的调用点（`app/graph.py:112`）。
+> **调试例外**：`call_trace.entry` 这条日志会打印**完整出站请求体**（`kind:"http"`
+> 的 `detail.body`，含 `messages` 全文与 `tools` schema），以及聚合后的回答
+> （`kind:"llm"` 的 `detail.response.content`）。因此包含用户问题与全部历史，
+> **与上述「不打印对话正文」的约定相反**。它只用于排查模型为何不调用工具 /
+> 某次调用到底发了什么，上线前应移除或降级。
 >
-> 该函数依赖 provider 的私有方法 `ChatOpenAI._get_request_payload`，因此：
-> - 只有 OpenAI 兼容模型会打出这条日志；`DeterministicMockChatModel` 等自研/测试模型没有该方法，会**静默跳过**（实测 `request_payload` 出现 0 次）。
-> - 失败时只记 `memory.agent.payload.preview_failed` 并继续请求，不会中断回答。
-> - 重建时把 `bind_tools` 产生的 `RunnableBinding.kwargs`（含 `tools`）原样回填，因此**包含实际发出的 schema**。
+> 该 body 来自 httpx `event_hooks`（OpenAI SDK 构造的请求体），不是本地重建：
+> - 只有真正走 httpx 的调用才有（`ChatOpenAI` 走；`DeterministicMockChatModel`
+>   等测试模型不经过 httpx，因此没有 `kind:"http"` 条目）。
+> - 因为读的是 httpx 自己的可重放 `ByteStream`，**不会**消费掉 LangChain
+>   正在消费的 SSE 流。
+> - 与 `kind:"llm"` 条目里的 `detail.request` 不同，这里的 body 含
+>   langchain-openai 内部补上的 `stream` / `stream_options` 等字段——这正是
+>   之前 `_build_request_payload_preview()` 重建不出来的部分（该函数已随本次
+>   改动删除）。
+> - `Authorization` / `api-key` 请求头在写入前替换为 `"***"`。
+
+### HITL（人工确认）
+
+`langchain_agent` 图在 `agent` 与 `tools` 之间有 `hitl_gate` 节点，对
+`HITL_TOOLS`（默认 `web_search`）调用 `interrupt()`。默认开启，可用
+`HITL_ENABLED=false` 关闭。
+
+- 首轮流到 `HITL_TOOLS` 里的工具时暂停，发送 `interrupt` 事件，**工具不执行**
+- 前端确认后调 `POST /api/chat/resume`（body `{"resume": true|false}`），
+  后端用 `Command(resume=...)` 从同一 checkpoint 的中断点继续，不重复已发出的
+  LLM 调用
+- 中断状态存在 Checkpointer 中；进程重启会丢失（当前为进程内 `MemorySaver`）
+
+`web_search` 默认**自动执行、不弹确认框**（`WEB_SEARCH_AUTO_EXECUTE=true`，
+见 `langchain_agent/app/config.py`）：`hitl_gate_node` 在决定哪些 pending
+tool_call 需要确认时，会对 `name == "web_search"` 且该开关为真的调用直接放行。
+把 `WEB_SEARCH_AUTO_EXECUTE=false` 可以恢复“每次搜索都要手工确认”的旧行为，
+而不影响 `HITL_TOOLS` 里其他工具（如果以后加进去）的确认逻辑。
+
+### `should_continue` 路由机制（会不会一直调用工具？）
+
+`should_continue`（`langchain_agent/app/graph.py`）是 `agent` 节点之后的路由函数，
+逻辑是纯语法判断，不涉及任何"调用了几次""该不该继续"的语义：
+
+```python
+def should_continue(state):
+    last_message = state["messages"][-1]
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        return "tools"
+    return "update_memory"
+```
+
+只要这一轮模型返回的 `AIMessage` 带 `tool_calls`（不管是 `web_search`、
+`calculator` 还是 `search_memory`，也不管这是第几次），就无条件路由到
+`tools` 去执行；模型这一轮不带 `tool_calls`（给出纯文本回答），才路由到
+`update_memory` 结束。
+
+这意味着 **如果模型自己反复决定要调用同一个工具，`should_continue` 本身完全不会
+拦截**——它会一直放行，图沿着 `agent -> hitl_gate -> tools -> agent` 这条边
+不断循环，直到下面两道防线之一起作用：
+
+1. **全局步数上限**（见下一节 `AGENT_MAX_STEPS_*`）：不管反复调用的是哪个工具，
+   图的总步数撞线后 LangGraph 直接抛 `GraphRecursionError`，对话被中断、返回
+   错误提示——这是"压线崩溃"式兜底，不会让模型体面地给出回答。
+2. **`web_search` 专属预算**（见下一节 `WEB_SEARCH_MAX_CALLS_PER_TURN`）：
+   `hitl_gate` 之后的 `create_route_after_hitl` 统计本轮 `web_search` 的调用
+   次数，达到上限后不再路由到 `tools`，改路由到 `force_finalize`，模型物理上
+   发不出新的 `web_search` 调用，被迫用已有信息给出文字回答。
+
+**已知局限**：预算机制目前只盯 `web_search` 这一个工具。如果模型反复调用的是
+`calculator`、`search_memory` 等其它工具，`should_continue` 和 `hitl_gate` 都不
+会拦截，只能靠第 1 道全局步数上限兜底（表现为对话被中断而不是正常回答）。按
+`AGENTS.md` 里定的规则，任何会被反复调用的工具都该有自己的硬性预算——目前只
+有 `web_search` 补齐了，其它工具仍是"裸奔"状态，是已知的后续工作项。
+
+### Agent 最大步数（防止死循环）
+
+图在 `agent -> hitl_gate -> tools -> agent` 之间循环，直到模型不再请求工具调用。
+如果模型反复用越来越离谱的 query 调同一个工具（例如不断把 `web_search` 的
+`query` 参数越拼越长），图会无限循环下去。两个入口各有一个独立的步数上限，
+超限时 LangGraph 抛 `GraphRecursionError`，由入口捕获并转成友好提示（流式是
+`{"type":"error","code":"recursion_limit"}` SSE 事件，非流式是一句中文提示），
+不会让请求挂起：
+
+| 环境变量 | 默认值 | 作用入口 |
+|---|---|---|
+| `AGENT_MAX_STEPS_SYNC` | `10` | `/api/chat`（`langchain_agent/app/runtime.py` 的 `GRAPH_RECURSION_LIMIT`） |
+| `AGENT_MAX_STEPS_STREAM` | `25` | `/api/chat/stream`（`chat_service/services/chat/chat_stream.py` 的 `RECURSION_LIMIT`） |
+
+类似 Copilot VS Code 插件里对一次请求的最大工具调用轮数做硬性限制。
+
+### `web_search` 每轮调用预算（防止同一工具反复重试）
+
+`AGENT_MAX_STEPS_*` 限的是整张图的步数，撞线后直接中断并返回错误提示，属于
+“压线崩溃”兜底，不是让模型体面地停下来回答。同一个工具（典型如
+`web_search`）在一轮对话里被反复用稍微变化的 query 调用、却迟迟给不出答案，
+正是这次排查的死循环场景——撞到 `AGENT_MAX_STEPS_*` 之前已经浪费了好几轮。
+
+`WEB_SEARCH_MAX_CALLS_PER_TURN`（默认 `3`，定义在 `langchain_agent/app/config.py`，
+与 `AGENT_MAX_STEPS_*` 在一起）是更细粒度的单工具预算：`hitl_gate` 之后的路由函数
+`create_route_after_hitl`（`langchain_agent/app/graph.py`）统计自上一条用户消息
+以来 `web_search` 已被调用的次数，一旦达到上限且模型还想再调 `web_search`，就不再
+路由到 `tools`，而是路由到 `force_finalize`——一个**不绑定任何工具**的节点（模型
+此时物理上发不出结构化的 `tool_call`），然后路由到 `update_memory` 结束本轮。不是
+靠一句"请停止搜索"的提示语指望模型自觉配合（这类纯提示型兜底已被证实不可靠，
+模型会无视提示继续重试），而是机制上直接拿掉继续调用的可能性。
+
+实现 `force_finalize` 时踩过两个坑，都已修掉：
+
+1. **强制回答一度完全不显示**：最初在一个独立节点里同步调用 `llm.invoke()`，
+   生成的文字确实进了最终状态，但从未经过流式 token 通道（`get_stream_writer()`），
+   前端什么都看不到。
+2. **"不绑定工具"不代表模型不会吐工具调用格式的文本**：换用 NVIDIA 托管的模型
+   实测后发现，即使这次请求完全没有带 `tools` schema，模型仍然会把它学到的
+   工具调用语法原样当成普通文本吐出来（例如一整段
+   `<tool_call><function=web_search>...` 直接显示在屏幕上），尤其是当对话历史
+   里已经有大量真实的 tool_calls/ToolMessage 轮次时。
+
+现在 `create_force_finalize_node`（同步）/ `create_async_force_finalize_node`
+（流式）用 `llm.with_structured_output(_FinalAnswer)` 代替普通的 `llm.invoke()`
+拿最终回答（`_FinalAnswer` 是只有一个 `answer: str` 字段的 pydantic schema；
+为什么这样做、以及之前"检测+重试+兜底"的方案为什么不够，见下面"后续更新
+（2026-10-03）"）。`_LEAKED_TOOL_CALL_PATTERN` 仍然保留，作为对 `answer` 字段
+本身的兜底检测；命中或 structured 调用本身报错，会重试最多
+`MAX_FINALIZE_ATTEMPTS` 次，再不行才返回固定道歉文案
+（`SEARCH_BUDGET_FALLBACK_ANSWER`，外加本轮已搜到的原始资料，见下文），绝不会
+把原始的工具调用语法展示给用户。流式场景下这意味着这一步**不是**真正的逐字符
+流式输出——而是先在后端攒齐、校验通过后一次性写入 token 通道——这是为了正确性
+特意做的取舍，只影响这一个"预算耗尽后强制收尾"的节点，正常回答仍然是逐字符
+流式的。
+
+| 环境变量 | 默认值 | 作用 |
+|---|---|---|
+| `WEB_SEARCH_MAX_CALLS_PER_TURN` | `3` | 单轮对话内 `web_search` 的最大调用次数，超限后强制无工具终结回答 |
+
+#### 实测：3 次搜索够不够？（live diagnostic）
+
+有过一次真实反馈——"华为 Pura X View 的芯片规格"这个问题在线上跑到 3 次
+`web_search` 后被预算兜底，只给出了固定道歉文案
+（`SEARCH_BUDGET_FALLBACK_ANSWER`）。为了确认这是预算太紧还是另有 bug，新增了
+`langchain_agent/tests/test_live_web_search_budget.py`：用 `env.sh` 里的真实
+`LLM_API_KEY`/`LLM_BASE_URL`/`TAVILY_API_KEY`（从 `os.environ` 读取，脚本本身
+从不解析或回显 `env.sh`）跑真实模型 + 真实 Tavily，分别用预算 3 和 6 跑同一个
+问题，把每次 `web_search` 的 query/结果和最终回答都打印出来。这个文件自带
+`unittest.skipUnless(...)`，没有真实凭据时在普通 `unittest discover` 下总是
+自动跳过，不影响正常测试套件。
+
+实测结果（2026-10-02）：**两次跑（预算 3 和 6）都只用了 3 次搜索就给出了正确、
+详尽的答案**（麒麟 9030S，含 CPU/GPU/NPU 规格），第一次搜索就已经命中了关键
+信息。也就是说，`langchain_agent` 现在的实现和默认预算对这个问题*本身*没有
+复现出 bug——没有改 `WEB_SEARCH_MAX_CALLS_PER_TURN`、没有改 `force_finalize`
+逻辑。用户当时看到的兜底回答更可能是一次性因素：搜索引擎索引当时还没收录到
+这条信息（这是刚发布没多久的新品），或者当次会话模型选的检索词恰好没压中。
+这类"信息时效性导致搜索暂时找不到"的失败模式，本身就是预算机制**该有**的行为
+——超限后体面地说明未找到，而不是继续死循环——不是回归点。
+
+`BASE_SYSTEM_PROMPT`（`langchain_agent/app/prompts.py`）目前确实没有任何"如何
+在有限次数内高效搜索"的指导（换词、先核实产品名再查规格、优先官方信息源），
+这仍然是此前"一个问题反复用越来越长的 query 重试"事件里观察到的真实风险点，
+属于廉价且无副作用的防御性加固，值得后续单独补上，但不是这次复现结果能证实
+的必须项，故未在本次改动中一并调整。
+
+#### 后续更新（2026-10-03）：真正复现到了，"多重试几次"治标不治本
+
+同一个问题后来在线上又失败了一次。打开新增的 `call_trace` 本地 trace（见下一
+节）才看清楚：模型这次确实搜到了足够信息（3 次 query 从宽泛到具体，最后一次
+已经在问制程/代工厂细节），budget 正常触发 `force_finalize`，但
+`force_finalize` 让模型在"不绑定工具"的情况下组织最终回答时，泄漏了
+`<tool_call>`/`<function=...>` 格式的文本，于是失败回退成固定道歉文案。
+
+第一次修复（`MAX_FINALIZE_ATTEMPTS` 从 1 次重试加到 2 次重试，外加
+`_build_fallback_answer` 把已搜到的原始资料附在道歉文案后面）**没有彻底解决
+问题**：日志显示三次尝试泄漏的是**一模一样**的文本——
+
+```
+<tool_call>
+<function=web_search>
+<parameter=query>
+华为 Pura X View 麒麟9030S 官方规格
+</parameter>
+</function>
+</tool_call>
+```
+
+也就是说模型不是"格式手滑"，而是**真心还想再调用一次 `web_search`**（哪怕没有
+任何 `tools` schema 绑定、哪怕系统提示明确说了"没有工具可用，直接用已有信息回
+答"）——换一句措辞更强硬的重试指令，对这种情况没用，多重试几次也只是反复撞到
+同一个结果。
+
+真正的修复是不再和模型的"工具调用直觉"打嘴仗，而是顺着它：
+`create_force_finalize_node`/`create_async_force_finalize_node` 现在给模型
+**恰好一个它可以合法调用的"工具"**——`llm.with_structured_output(_FinalAnswer)`
+（`_FinalAnswer` 是 `langchain_agent/app/graph.py` 里一个只有 `answer: str` 字段
+的 pydantic schema）。模型已经被训练得倾向于"调用一个函数"而不是写自由文本，给
+它一个真正能被解析的结构化目标，而不是强行禁止它调用任何东西，这个倾向就不会
+再以泄漏文本的形式溢出。用同一段触发过 3/3 次泄漏的真实对话历史重放验证
+（`llm.with_structured_output(_FinalAnswer).invoke(...)`），两次独立调用都干净
+地给出了"麒麟 9030S，八核 CPU / Maleoon 935F GPU / 中芯国际 N+2 代工"的正确
+文字回答，不再有任何 `<tool_call>` 残留。
+
+`method="function_calling"` 是显式写死的，没有用 langchain-openai 的默认值
+（0.3.0 起默认是 `"json_schema"`，即 OpenAI 的 strict Structured Outputs
+`response_format`）：默认值碰巧在当前用的 NVIDIA 托管端点上也能跑通，但这不是
+所有 OpenAI 兼容 provider 都可靠支持的——例如 DeepSeek 的 Chat Completions
+接口官方只稳定支持宽松的 `json_object` 模式（不校验字段结构，官方文档还提到
+偶尔会返回空 `content`），严格的 `json_schema` 还在 Beta、挂在单独的 Responses
+API/base URL 下。相比之下，function/tool calling 是这张图本来就依赖、各家
+provider 支持最广泛的结构化输出机制（`web_search`/`calculator`/`search_memory`
+已经在用），所以这里显式钉死这个 method，不依赖某个 provider 可能不支持或行为
+不一致的默认值——以后换 provider（包括 DeepSeek）不会因为这一个节点悄悄失效。
+
+`MAX_FINALIZE_ATTEMPTS = 3` 和 `_build_fallback_answer`（真失败时道歉文案 +
+已搜到的原始资料）都还在，但现在只用来兜底真正的 provider/解析异常，或者万一
+`answer` 字段本身仍然混入了泄漏标记的极端情况——不再是对抗"模型坚持要调
+`web_search`"的主力手段。`_LEAKED_TOOL_CALL_PATTERN` 对应保留，作为这个兜底
+检测用。
+
+每次失败（结构化调用报错，或兜底检测命中）现在都会把原因前 500 字符写进
+`force_finalize.structured_output_failed` / `force_finalize.leaked_tool_call_syntax`
+的 WARNING 日志（见下面"写入日志文件"一节），下次再复现可以直接从
+`logs/chat_service.log` 里看到模型到底想做什么，不需要再靠临时加打印去猜。
+
 
 ## 短期记忆的读与写
 
@@ -355,6 +571,332 @@ python -m pytest langchain_agent/tests chat_service/test -q
 - `langchain_agent/app/graph.py:203`：`build_memory_agent_graph()`，同时绑定 checkpointer 与 store。
 - `langchain_agent/app/config.py:27`：`MEMORY_EMBEDDING_MODEL/DIMS/TOP_K` 配置；`app/config.py:53`：`get_embeddings()`。
 - `langchain_agent/tests/test_long_term_memory.py`：长期记忆测试。
+
+## Agent 节点的异步流式执行与 HTTP 跟踪
+
+### 1. `async def agent` 函数如何被调用
+
+`async def agent`（`app/graph.py:220-287`）不是直接由业务代码调用的函数，而是一个 **LangGraph 节点的逻辑处理函数**。调用链如下：
+
+```text
+chat_service/api/routes_chat.py:101
+  @router.post("/api/chat/stream")
+    -> chat_stream() 路由处理函数
+      -> async def event_stream() (line 120)
+        -> _chat_stream_service.stream_turn()  (line 125)
+          -> ChatStreamService._run(graph, inputs, config)  (chat_stream.py:185-266)
+            -> async for mode, chunk in graph.astream(inputs, config, stream_mode=...)
+              [LangGraph 运行时驱动图执行]
+                -> 执行 START 节点
+                  -> 执行 "agent" 节点
+                    [LangGraph Pregel 调度器在这里调用 agent 函数]
+                    -> async def agent(state, config)  ← 在这里
+```
+
+**具体发生的地方**：
+- **路由入口**：`chat_service/api/routes_chat.py:101-142`，`@router.post("/api/chat/stream")` 异步处理器
+- **流驱动**：`chat_stream.py:185-266` 的 `ChatStreamService._run()` 内，`async for mode, chunk in graph.astream(...)`（line 208）
+- **节点调度**：LangGraph 的 Pregel 运行时在调度 superstep 时，通过注册的节点（`graph.py:242` 的 `workflow.add_node("agent", agent_node)`）找到 `agent` 函数并调用它
+- **时序**：LangGraph 按控制流依次执行 `START → agent → 条件边 → tools/update_memory → END`，每个节点的输入是当前累积的 state
+
+**为什么是 async**：
+- `async def agent` 是为了支持流式执行（`streaming=True` 时自动选择此版本，见 `graph.py:742`）
+- 异步版本内用 `async for chunk in llm_with_tools.astream(...)` 逐字读取 LLM token
+- 每个 token 通过 `writer({"kind": "token", "text": text})` 发到前端，释放 CPU 给事件循环（其他并发请求）
+- 本项目仅流式 `/api/chat/stream` 使用；非流式 `/api/chat` 用同步版本 `create_agent_node(streaming=False)` 返回的函数
+
+**agent 函数的核心实现**（`app/graph.py:220-287`）：
+```python
+async def agent(state: MemoryGraphState, config: RunnableConfig) -> Dict[str, Any]:
+    messages = state["messages"]                           # 读短期历史
+    outbound = [SystemMessage(content=system_content)] + list(messages)  # 组织请求
+
+    parts: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+    
+    async for chunk in llm_with_tools.astream(outbound, config=config):  # 流式调用 LLM
+        text = chunk_text(chunk)
+        if text:
+            parts.append(text)
+            writer({"kind": "token", "text": text})  # 实时发送 token
+        # 处理 tool_calls...
+    
+    # 节点自己不再写 trace：这次 LLM 调用的 request 和**聚合后**的 response
+    # 已由 call_trace.LlmTraceHandler 在 on_chat_model_start / on_llm_end
+    # 里记录（on_llm_end 拿到的正是 langchain-core 用同一批 chunk 合并出来
+    # 的消息），下面的 parts 合并只是为了给图状态补一个 AIMessage。
+    response = AIMessage(content="".join(parts), tool_calls=tool_calls)
+    return {"messages": [response]}  # 返回状态增量
+```
+
+**state 合并与控制流**：
+- `agent` 收到的 `state["messages"]` 已由 LangGraph 和 Checkpointer 自动恢复，包含整个短期历史
+- 函数返回 `{"messages": [new_message]}`（只有本轮 AIMessage），由 `add_messages` reducer（`state.py:23`）追加到列表末尾
+- LangGraph 调用 `should_continue(updated_state)` 判断是否需要执行工具；此时 `state["messages"][-1]` 已是本轮返回的 AIMessage
+
+### 2. Call Trace 的初始化与回调/HTTP 钩子
+
+Call Trace 用 `contextvars.ContextVar` 为每个请求独立管理一份 entry list，
+收集**每次 LLM 调用（聚合后的 request/response）**、**每次工具执行**、
+HTTP 请求/响应尝试，以及本地函数 span。
+
+四种 `kind`：
+
+| kind | 来源 | 说明 |
+|---|---|---|
+| `llm` | `LlmTraceHandler` 的 `on_chat_model_start` / `on_llm_end` | 一次 LLM 调用一条，含聚合响应 |
+| `tool` | `LlmTraceHandler` 的 `on_tool_start` / `on_tool_end` | 一次工具执行一条（`web_search` 只能靠这层看到） |
+| `http` | httpx `event_hooks` | 传输层细节：尝试次数、状态码、出站 body |
+| `local` | 图节点里的 `record_local(...)` | 节点决策类 span（`hitl_gate`/`search_budget_check`/`force_finalize`） |
+
+回调由 `build_trace_callbacks()` 挂到图运行的 `config["callbacks"]`
+（`runtime.py` 的 `invoke` 与 `chat_stream.py` 的 `astream` 各挂一次）。
+
+#### 初始化入口
+
+**① 非流式 `/api/chat` 的初始化**（`chat_service/services/chat/chat_service.py:87`）：
+```python
+with call_trace.trace_scope() as call_entries:
+    answer = self._memory_runtime.generate_answer_with_memory(
+        llm=llm_client.get_llm(),
+        ...
+    )
+# 图执行结束后 call_entries 已填满
+for entry in call_entries:
+    trace.add_step(
+        name=entry["name"],
+        detail=entry["detail"],
+        status=entry["status"],
+        duration_ms=entry["duration_ms"],
+        kind=entry["kind"],
+    )
+```
+
+**② 流式 `/api/chat/stream` 的初始化**（`chat_stream.py`）：
+```python
+with call_trace.trace_scope() as call_entries:
+    # 必须在 trace_scope() 内部构造：scope 会把 sink 重新绑定到新 list
+    drain = _TraceDrain(call_entries)
+    async for mode, chunk in graph.astream(inputs, config, stream_mode=[...]):
+        # ...处理流式事件...
+        for trace_event in drain.drain():
+            yield trace_event  # 实时发送新增/已 finalize 的 trace
+```
+
+两者都用 `call_trace.trace_scope()` 包住 LangGraph 执行；上下文管理器负责创建、绑定和清理 entry list。
+
+#### HTTP 钩子的挂载点
+
+**LLM 客户端初始化**（两处都会调用，提供给 OpenAI SDK）：
+
+1. **主聊天 LLM**（`langchain_agent/app/config.py:114-117`）：
+```python
+http_client, http_async_client = call_trace.build_traced_http_clients()
+if http_client is not None:
+    kwargs["http_client"] = http_client
+    kwargs["http_async_client"] = http_async_client
+return ChatOpenAI(**kwargs)
+```
+
+2. **问答管道 LLM**（`qa_service/llm_client.py:84-87`）：
+```python
+http_client, http_async_client = call_trace.build_traced_http_clients()
+if http_client is not None:
+    kwargs["http_client"] = http_client
+    kwargs["http_async_client"] = http_async_client
+return ChatOpenAI(**kwargs)
+```
+
+两个 ChatOpenAI 实例都注入了带钩子的 httpx clients。
+
+#### 钩子的具体实现
+
+**钩子工厂**（`langchain_agent/app/call_trace.py:165-192`）：
+```python
+def build_traced_http_clients():
+    """Build httpx.Client 和 httpx.AsyncClient，请求/响应事件会写入当前 trace_scope。"""
+    import httpx
+    
+    sync_hooks = {"request": [_on_request], "response": [_on_response]}
+    async_hooks = {"request": [_on_request_async], "response": [_on_response_async]}
+    
+    return (
+        httpx.Client(event_hooks=sync_hooks),
+        httpx.AsyncClient(event_hooks=async_hooks),
+    )
+```
+
+httpx 的 event_hooks 机制在 request 发出前、response 收到后自动调用这些钩子。
+
+**Request 钩子**（`call_trace.py:103-126`）：
+```python
+def _on_request(request: Any) -> None:
+    try:
+        attempt = next(_attempt_seq)  # 自增的重试序列号
+        request.extensions["call_trace_attempt"] = attempt
+        request.extensions["call_trace_started"] = time.perf_counter()
+        
+        entry = {
+            "kind": "http",
+            "name": "llm_request",
+            "status": "pending",
+            "detail": {
+                "method": request.method,
+                "url": str(request.url),
+                "attempt": attempt,
+                "headers": _redact_headers(request.headers),  # 脱敏 Authorization
+            },
+            "duration_ms": None,
+        }
+        _log_entry(entry)  # 同步写日志文件
+        sink = _SINK.get()  # 获取当前请求的 trace list
+        if sink is not None:
+            sink.append(entry)  # 追加到 entry list
+    except Exception:
+        logger.debug("call_trace.on_request.failed", exc_info=True)
+```
+
+**Response 钩子**（`call_trace.py:128-155`）：
+```python
+def _on_response(response: Any) -> None:
+    try:
+        request = response.request
+        attempt = request.extensions.get("call_trace_attempt")
+        started = request.extensions.get("call_trace_started")
+        duration_ms = (time.perf_counter() - started) * 1000 if started is not None else None
+        
+        # ⚠️ 故意不读 response body：SSE 流式响应会被"偷走"
+        entry = {
+            "kind": "http",
+            "name": "llm_response",
+            "status": "ok" if response.status_code < 400 else "error",
+            "detail": {
+                "method": request.method,
+                "url": str(request.url),
+                "attempt": attempt,
+                "status_code": response.status_code,
+            },
+            "duration_ms": duration_ms,
+        }
+        _log_entry(entry)
+        sink = _SINK.get()
+        if sink is not None:
+            sink.append(entry)
+    except Exception:
+        logger.debug("call_trace.on_response.failed", exc_info=True)
+```
+
+#### 本地函数 span 记录
+
+图节点在执行过程中也会记录跟踪。例如 agent 节点（`app/graph.py:270-278`）：
+```python
+call_trace.record_local(
+    "agent",  # 节点名
+    {
+        "message_count": len(outbound),
+        "request_payload": payload,  # 完整 LLM 请求体预览
+        "tool_calls": len(tool_calls),
+    },
+    duration_ms=duration_ms,
+)
+```
+
+`record_local` API（`call_trace.py:69-90`）：
+```python
+def record_local(
+    name: str,
+    detail: Dict[str, Any],
+    status: str = "ok",
+    duration_ms: Optional[float] = None,
+) -> None:
+    """记录一个本地函数/节点 span。"""
+    try:
+        entry = {
+            "kind": "local",  # 与 "http" 区分
+            "name": name,
+            "status": status,
+            "detail": detail,
+            "duration_ms": round(duration_ms, 2) if duration_ms is not None else None,
+        }
+        _log_entry(entry)  # 日志
+        sink = _SINK.get()
+        if sink is not None:
+            sink.append(entry)
+    except Exception:
+        logger.debug("call_trace.record_local.failed", exc_info=True)
+```
+
+#### 跟踪被消费的地方
+
+**非流式**：`ChatService.ask()`（`chat_service.py:136-143`）逐一把 entry 添加到 TraceBuilder，最终作为响应的 trace 字段返回。
+
+**流式**：`ChatStreamService._run()`（`chat_stream.py`）每收到一个 chunk 前先
+`drain.drain()` 一次，把新出现的 entry 以及已被原地 finalize 的旧 entry 转成
+`StreamEvent("trace", ...)` yield 给前端（带稳定 `seq`，前端据此覆盖同一行）。
+
+### 3. 完整 HTTP Payload 记录：已落地
+
+本节原是三个候选方案的讨论（方案 A 记 request body、方案 B 流式 tee、
+方案 C 复用节点内重建的 payload）。**最终采用的是比三者都更靠上的一层**：
+`call_trace.LlmTraceHandler` —— 记录直接来自 LangChain 的
+`on_chat_model_start` / `on_llm_end` / `on_tool_start` / `on_tool_end` 回调。
+
+**为什么不是 httpx 层**：`event_hooks` 只能看到"发出去/回来了"，拿不到语义。
+回调层则直接拿到：
+
+| 需求 | 旧做法 | 现在的来源 |
+|---|---|---|
+| 每轮聚合的 request/response | 节点内手搓 `"".join(parts)` | `on_llm_end` 拿 langchain-core 已合并的消息 |
+| 每次调用的耗时 | 节点自己 `perf_counter` | 回调的 start/end 之间计时 |
+| 工具调用（含 `web_search`） | **trace 里完全看不到** | `on_tool_start`/`on_tool_end` |
+| `stream`/`stream_options` 等内部字段 | 重建不出来 | httpx `detail.body`（真实 wire payload） |
+
+`httpx` 层保留下来做传输层细节（"发了几次、状态码多少、重试没有"），并通过
+共享的 `llm_call_id` 与 `llm` 条目关联。
+
+关键实现事实（均为实测结论，不是推测）：
+
+1. **`on_llm_end` 拿到的就是聚合结果。** langchain-core 的
+   `BaseChatModel.astream` 在流结束后执行
+   `merge_chat_generation_chunks(chunks)` 再 `on_llm_end(LLMResult(...))`，
+   所以 handler 拿到的是完整消息，与节点自己 join 出来的结果等价，但不必
+   重写一遍合并逻辑。
+2. **一个 sync handler 同时覆盖 `invoke` 和 `astream`。** 回调管理器会把 sync
+   handler 包装后用于 async 路径，因此不需要维护 `AsyncCallbackHandler` 版本
+   （但必须继承 `BaseCallbackHandler`：回调管理器会读实例上的 `run_inline`
+   等属性，自己写的普通对象会在 `on_chat_model_start` 处直接
+   `AttributeError`）。
+3. **节点内的 ContextVar 是通的。** `ToolNode` 执行的工具里也能看到
+   `trace_scope()` 的 sink，`sync`/`async` 两条图执行路径都成立。
+4. **mock 模型必须用真的 `bind_tools`。** 测试替身若返回一个带 `invoke`/
+   `astream` 的普通对象，会绕过整个 Runnable 机制，回调根本不触发；应改成
+   `self.bind(tools=[convert_to_openai_tool(t) for t in tools])`。同理，
+   mock 的 `_astream`/`_stream` 必须 yield `ChatGenerationChunk`（由 core 负责
+   解包成 `AIMessageChunk`），不能直接 yield `AIMessageChunk`。
+5. **回调的 `run_id` 是 `uuid.UUID` 对象，不是 str。** 直接写进 trace 会让
+   `json.dumps` 在 SSE 帧上报
+   `TypeError: Object of type UUID is not JSON serializable`；而这个异常发生在
+   Starlette 的 **ASGI send 路径**里 —— 不是丢一帧，而是中断整个响应。
+   必须在入口 `str(run_id)`。
+6. **`ContextVar.reset()` 只能在创建它的 Context 里调用。** SSE 的 body
+   iterator 跨 `yield` 挂起，客户端断开时会被另一个 task finalize，
+   `trace_scope` 的 `finally` 因此在另一个 Context 执行，抛
+   `ValueError: ... was created in a different Context`，并把首因（通常是 5 的
+   序列化异常）埋掉。已捕获降级：丢掉这次 reset 无害。
+7. **跨 task 关闭生成器的回归测试必须跑在活着的 loop 上。** 用 `asyncio.run`
+   时，loop 关停会就地 cancel 挂起的生成器，不会跨 Context，于是**带着 bug 也
+   能通过**。
+8. **payload 不截断。** 请求体 / 聚合回答 / 工具结果全文保留，只有异常文本按
+   `MAX_ERROR_CHARS`（500）截断。被截短的 payload 比长 payload 更糟——无法
+   区分"被截断"和"本来就这么短"。可读性交给前端（`RawOutput` 超长时折叠 +
+   展开/收起，Copy 复制全文）。
+9. **每条 entry 都带 `conversation_id`。** `trace_scope(conversation_id=...)`
+   把它盖在每条上；日志前缀取 id 的可读头（`conversation-ae17acaa`）便于 grep。
+   多轮对话在同一个日志文件里交错，没有这个只能靠时间戳猜归属。
+
+`_on_request` 记 body 是安全的：httpx 把请求体存为可重放的 `ByteStream`，
+在 `request` hook 里读 `request.content` 不会消费掉任何东西（流式 **响应**
+才不能读，见上）。
 
 ## LangGraph 驱动过程：writer 是什么
 

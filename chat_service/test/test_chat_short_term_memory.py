@@ -73,10 +73,22 @@ class TestChatShortTermMemory(unittest.TestCase):
             "你刚才告诉我你是老周。",
         )
         self.assertNotEqual(first_result.trace["trace_id"], second_result.trace["trace_id"])
-        self.assertEqual(
-            [step["name"] for step in second_result.trace["steps"]],
-            ["request", "llm", "response"],
-        )
+        # The per-LLM-call payload now comes from call_trace's callback handler
+        # (kind="llm"), not from a node-local "agent" span: the graph nodes no
+        # longer record their own span, so one entry appears per LLM call the
+        # model made. This turn has no tool calls, so exactly one is expected.
+        # "llm" remains the pre-existing aggregate step.
+        step_names = [step["name"] for step in second_result.trace["steps"]]
+        self.assertEqual(step_names.count("llm_call"), 1)
+        self.assertNotIn("agent", step_names)
+        llm_steps = [
+            step for step in second_result.trace["steps"] if step["name"] == "llm_call"
+        ]
+        self.assertEqual(llm_steps[0]["kind"], "llm")
+        # The aggregated response is captured from on_llm_end, not rebuilt by
+        # the node — so it carries the real answer text.
+        response = llm_steps[0]["detail"]["response"]
+        self.assertEqual(response["content"], "你刚才告诉我你是老周。")
         self.assertIn("老周", second_result.answer)
 
     def test_api_requires_and_forwards_conversation_header(self) -> None:

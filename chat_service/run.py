@@ -11,18 +11,37 @@ Environment:
 """
 
 import logging
+import logging.handlers
+import os
 
 import uvicorn
-import os
 from chat_service.services.chat.config import settings
 from qa_service import config as qa_config
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+# Repo-root logs/ dir, regardless of the process's cwd. Rotating so a long-
+# running dev server doesn't grow this file unbounded. Every INFO+ log line
+# (including the per-call `call_trace` entries from langchain_agent/app/
+# call_trace.py) lands here as well as on the console, so a failed turn can
+# be analyzed straight from the file instead of only from whatever scrollback
+# the terminal still has.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_LOG_DIR = os.path.join(_REPO_ROOT, "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_LOG_FILE = os.path.join(_LOG_DIR, "chat_service.log")
+
+_formatter = logging.Formatter(
+    fmt="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_formatter)
+_file_handler = logging.handlers.RotatingFileHandler(
+    _LOG_FILE, maxBytes=20 * 1024 * 1024, backupCount=5, encoding="utf-8"
+)
+_file_handler.setFormatter(_formatter)
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
 logger = logging.getLogger(__name__)
+logger.info("Logging to console and %s", _LOG_FILE)
 
 
 def main() -> None:

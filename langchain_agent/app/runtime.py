@@ -14,6 +14,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.store.base import BaseStore
 
 from . import config as app_config
+from .call_trace import build_trace_callbacks
 from .graph import build_memory_agent_graph
 from .long_memory import create_memory_store
 
@@ -140,6 +141,11 @@ class MemoryRuntime:
                         "entrypoint": "chat_service.api.chat",
                     },
                     "tags": ["chat_service", "api-chat", "tool-agent"],
+                    # Records one aggregated entry per LLM call and per tool
+                    # call into the active call_trace scope — the node no
+                    # longer records its own span, so this is the only source
+                    # of the per-call request/response payload.
+                    "callbacks": build_trace_callbacks(),
                     "recursion_limit": GRAPH_RECURSION_LIMIT,
                 },
             )

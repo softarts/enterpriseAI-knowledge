@@ -33,6 +33,7 @@ from chat_service.services.chat.stream_events import (
     StreamEvent,
     StreamEventMapper,
 )
+from langchain_agent.app import call_trace
 from langchain_agent.app import config as app_config
 from langchain_agent.app.graph import build_memory_agent_graph
 from qa_service import llm_client
@@ -79,6 +80,93 @@ def _read_final_state(graph: Any, config: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:  # noqa: BLE001 - diagnostics must never break the stream
         logger.debug("chat.stream.final_state_unavailable", exc_info=True)
         return {}
+
+
+def _trace_event(entry: Dict[str, Any], seq: int) -> StreamEvent:
+    """Render one call_trace entry as a ``trace`` protocol event.
+
+    ``seq`` is the entry's stable index within the per-turn sink. Entries are
+    appended in a provisional state (``pending`` for an LLM call, ``running``
+    for a tool call) and then *finalized in place* with their aggregated
+    result and duration, so the same ``seq`` can legitimately be emitted more
+    than once — the frontend replaces the row it already has.
+    """
+    return StreamEvent(
+        "trace",
+        {
+            "seq": seq,
+            "kind": entry["kind"],
+            "name": entry["name"],
+            "status": entry["status"],
+            "detail": entry["detail"],
+            "duration_ms": entry["duration_ms"],
+            # Carried on every row so a trace line is self-identifying when
+            # several conversations are interleaved in one timeline/log.
+            **(
+                {"conversation_id": entry["conversation_id"]}
+                if entry.get("conversation_id")
+                else {}
+            ),
+            **(
+                {"llm_call_id": entry["llm_call_id"]}
+                if entry.get("llm_call_id")
+                else {}
+            ),
+            **(
+                {"tool_call_id": entry["tool_call_id"]}
+                if entry.get("tool_call_id")
+                else {}
+            ),
+        },
+    )
+
+
+class _TraceDrain:
+    """Incrementally drains the per-turn call_trace sink into trace events.
+
+    ``call_entries`` is mutated in place by ``call_trace`` while the graph
+    runs, so this is drained after every chunk of the main stream loop — that
+    is what keeps trace rows interleaved with ``tool_call``/``tool_result`` in
+    the order they really happened.
+
+    Two kinds of change are picked up:
+
+    - entries appended since the last drain, and
+    - entries already drained whose ``status``/``detail``/``duration_ms``
+      changed, i.e. an LLM or tool call that was emitted provisionally and
+      has since been finalized in place.
+
+    The second case is why rows can repeat: the frontend keys rows by ``seq``
+    and replaces them, rather than appending a duplicate.
+    """
+
+    #: Statuses that mean "still in flight"; anything else is final.
+    _PROVISIONAL = frozenset({"pending", "running"})
+
+    def __init__(self, call_entries: List[Dict[str, Any]]) -> None:
+        self._entries = call_entries
+        # seq -> last status emitted for that seq.
+        self._emitted: Dict[int, str] = {}
+        self._drained = 0
+
+    def drain(self) -> List[StreamEvent]:
+        """Return events for everything new or newly finalized since last call."""
+        events: List[StreamEvent] = []
+        for seq in range(self._drained, len(self._entries)):
+            entry = self._entries[seq]
+            self._emitted[seq] = entry["status"]
+            events.append(_trace_event(entry, seq))
+        self._drained = len(self._entries)
+
+        for seq, status in list(self._emitted.items()):
+            entry = self._entries[seq]
+            if entry["status"] == status or entry["status"] in self._PROVISIONAL:
+                continue
+            # An already-drained row was finalized in place; re-emit it so the
+            # client can replace its provisional version with the real result.
+            self._emitted[seq] = entry["status"]
+            events.append(_trace_event(entry, seq))
+        return events
 
 
 def _final_state_events(
@@ -147,6 +235,10 @@ class ChatStreamService:
                 "entrypoint": "chat_service.api.chat.stream",
             },
             "tags": ["chat_service", "chat-stream"],
+            # Records one aggregated entry per LLM call and per tool call into
+            # the active call_trace scope. Drained incrementally by _run so the
+            # trace keeps its real ordering against tool_call/tool_result.
+            "callbacks": call_trace.build_trace_callbacks(),
             "recursion_limit": RECURSION_LIMIT,
         }
 
@@ -168,26 +260,37 @@ class ChatStreamService:
         interrupted = False
         final_state: Dict[str, Any] = {}
         tool_messages: List[ToolMessage] = []
+        # Built *inside* the trace_scope below: the context manager rebinds
+        # `call_entries` to a fresh list, so a drain constructed before it
+        # would hold a stale, permanently-empty reference.
+        drain: Optional[_TraceDrain] = None
 
         try:
-            async for mode, chunk in graph.astream(
-                inputs,
-                config=config,
-                stream_mode=STREAM_MODES,
-            ):
-                if mode == "custom":
-                    events = mapper.map_custom(chunk)
-                elif mode == "messages":
-                    events = mapper.map_messages(chunk)
-                elif mode == "updates":
-                    events = mapper.map_updates(chunk)
-                    final_state = _absorb_updates(chunk, final_state, tool_messages)
-                else:
-                    events = []
-                for event in events:
-                    if event.type == "interrupt":
-                        interrupted = True
-                    yield event
+            with call_trace.trace_scope(conversation_id=thread_id) as call_entries:
+                drain = _TraceDrain(call_entries)
+                async for mode, chunk in graph.astream(
+                    inputs,
+                    config=config,
+                    stream_mode=STREAM_MODES,
+                ):
+                    if mode == "custom":
+                        events = mapper.map_custom(chunk)
+                    elif mode == "messages":
+                        events = mapper.map_messages(chunk)
+                    elif mode == "updates":
+                        events = mapper.map_updates(chunk)
+                        final_state = _absorb_updates(chunk, final_state, tool_messages)
+                    else:
+                        events = []
+                    # Drain before yielding this chunk's own events, so e.g. the
+                    # agent node's LLM-call trace is emitted before the
+                    # tool_call it produced, matching real execution order.
+                    for trace_event in drain.drain():
+                        yield trace_event
+                    for event in events:
+                        if event.type == "interrupt":
+                            interrupted = True
+                        yield event
         except GraphRecursionError:
             logger.warning("chat.stream.recursion_limit thread_id=%s", thread_id)
             yield StreamEvent(
@@ -206,6 +309,12 @@ class ChatStreamService:
 
         for event in mapper.flush_final_scope():
             yield event
+        # A final drain picks up every entry the run produced plus the in-place
+        # finalizations of any that were emitted provisionally mid-stream.
+        # (No-op if the run failed before the scope could be opened.)
+        if drain is not None:
+            for trace_event in drain.drain():
+                yield trace_event
         for event in _final_state_events(final_state, mapper, tool_messages):
             yield event
         if interrupted:

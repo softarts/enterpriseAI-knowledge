@@ -11,6 +11,8 @@ export default function ChatWindow({
   onStop,
   pendingInterrupt = null,
   onInterruptConfirm,
+  conversationId = null,
+  onNewConversation,
 }) {
   const endRef = useRef(null);
 
@@ -23,6 +25,31 @@ export default function ChatWindow({
 
   return (
     <section className="chatwindow">
+      {/* Which conversation the messages below belong to. The backend scopes
+          short-term memory by this id, so it is the handle that ties the
+          visible history to its trace rows and log lines. */}
+      {conversationId && (
+        <div className="chatwindow__conv">
+          <span
+            className="chatwindow__conv-id"
+            title={conversationId}
+            aria-label={`Conversation ${conversationId}`}
+          >
+            {conversationId}
+          </span>
+          {onNewConversation && (
+            <button
+              type="button"
+              className="chatwindow__conv-new"
+              onClick={onNewConversation}
+              title="Start a new conversation (clears short-term memory for the next question)"
+            >
+              New
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="chatwindow__messages" role="log" aria-live="polite">
         {messages.length === 0 && !loading && (
           <div className="chatwindow__empty">

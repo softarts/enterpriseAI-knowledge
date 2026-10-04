@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from chat_service.trace import TraceBuilder
+from langchain_agent.app import call_trace
 from langchain_agent.app.runtime import MemoryRuntime
 from qa_service import config as qa_config
 from qa_service import llm_client
@@ -83,13 +84,14 @@ class ChatService:
             len(memory_context.conversation_messages),
         )
         try:
-            answer = self._memory_runtime.generate_answer_with_memory(
-                llm=llm_client.get_llm(),
-                system_prompt="",
-                question=question,
-                thread_id=thread_id,
-                user_id=user_id,
-            )
+            with call_trace.trace_scope(conversation_id=thread_id) as call_entries:
+                answer = self._memory_runtime.generate_answer_with_memory(
+                    llm=llm_client.get_llm(),
+                    system_prompt="",
+                    question=question,
+                    thread_id=thread_id,
+                    user_id=user_id,
+                )
         except Exception as exc:  # noqa: BLE001 - return provider/config errors to UI
             duration_ms = (time.perf_counter() - started) * 1000
             logger.warning(
@@ -99,6 +101,14 @@ class ChatService:
                 duration_ms,
             )
             message = f"{type(exc).__name__}: {exc}"
+            for entry in call_entries:
+                trace.add_step(
+                    name=entry["name"],
+                    detail=entry["detail"],
+                    status=entry["status"],
+                    duration_ms=entry["duration_ms"],
+                    kind=entry["kind"],
+                )
             trace.add_step(
                 name="llm",
                 detail={"error_type": "upstream", "message": message},
@@ -123,6 +133,14 @@ class ChatService:
             len(answer),
             duration_ms,
         )
+        for entry in call_entries:
+            trace.add_step(
+                name=entry["name"],
+                detail=entry["detail"],
+                status=entry["status"],
+                duration_ms=entry["duration_ms"],
+                kind=entry["kind"],
+            )
         trace.add_step(
             name="llm",
             detail={

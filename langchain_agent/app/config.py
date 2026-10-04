@@ -9,6 +9,8 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
+from . import call_trace
+
 OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY") or os.environ.get("LLM_API_KEY") or ""
 OPENAI_BASE_URL: Optional[str] = (
     os.environ.get("OPENAI_BASE_URL") or os.environ.get("LLM_BASE_URL") or None
@@ -91,7 +93,12 @@ def get_chat_model(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> BaseChatModel:
-    """Create the configured chat model."""
+    """Create the configured chat model.
+
+    The LLM API's HTTP request/response (status code, retries) is visible in
+    the Trace panel via ``call_trace``'s traced httpx clients — see
+    ``langchain_agent/app/call_trace.py``.
+    """
     resolved_key = api_key or OPENAI_API_KEY or "dummy-key"
     resolved_model = model_name or MODEL_NAME
     resolved_base_url = base_url or OPENAI_BASE_URL
@@ -103,5 +110,10 @@ def get_chat_model(
     }
     if resolved_base_url:
         kwargs["base_url"] = resolved_base_url
+
+    http_client, http_async_client = call_trace.build_traced_http_clients()
+    if http_client is not None:
+        kwargs["http_client"] = http_client
+        kwargs["http_async_client"] = http_async_client
 
     return ChatOpenAI(**kwargs)

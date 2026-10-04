@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import traceback
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -31,7 +32,9 @@ from langgraph.prebuilt import ToolNode
 from langgraph.config import get_stream_writer
 from langgraph.store.base import BaseStore
 from langgraph.types import interrupt
+from pydantic import BaseModel, Field
 
+from . import call_trace
 from . import config as app_config
 from .long_memory import (
     create_memory_store,
@@ -113,29 +116,6 @@ def _parse_tool_args(raw: str) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"value": parsed}
 
 
-def _build_request_payload_preview(
-    llm: BaseChatModel,
-    bound: Any,
-    messages: List[BaseMessage],
-) -> Optional[Dict[str, Any]]:
-    """Best-effort reconstruction of the outbound chat-completion payload.
-
-    Intended for debugging only: it never raises, and returns None when the
-    provider does not expose ``_get_request_payload`` (e.g. tests use a mock
-    chat model). ``bound`` is the RunnableBinding produced by ``bind_tools``;
-    its ``kwargs`` carry the exact ``tools`` argument sent to the provider.
-    """
-    builder = getattr(llm, "_get_request_payload", None)
-    if builder is None:
-        return None
-    bound_kwargs = getattr(bound, "kwargs", None) or {}
-    try:
-        return builder(messages, **dict(bound_kwargs))
-    except Exception:
-        logger.warning("memory.agent.payload.preview_failed", exc_info=True)
-        return None
-
-
 def create_agent_node(
     llm: BaseChatModel,
     system_prompt: Optional[str] = None,
@@ -145,6 +125,13 @@ def create_agent_node(
 
     Tools are bound to the LLM here; whether to call them is decided by the
     model inside the tool-calling loop, never by pre-retrieval in a pipeline.
+
+    This node deliberately records **no** trace span of its own: the per-call
+    request/response (including the aggregated answer and any tool calls) is
+    captured by ``call_trace.LlmTraceHandler`` from the model's own
+    ``on_chat_model_start``/``on_llm_end`` callbacks, which see the real wire
+    payload and the already-merged message. Re-recording it here would
+    duplicate every LLM call in the trace.
     """
     system_content = BASE_SYSTEM_PROMPT
     if system_prompt:
@@ -165,19 +152,13 @@ def create_agent_node(
         )
         system = SystemMessage(content=system_content)
         outbound = [system] + messages
-        payload = _build_request_payload_preview(llm, llm_with_tools, outbound)
-        if payload is not None:
-            logger.info(
-                "memory.agent.request_payload thread_id=%s payload=%s",
-                configurable.get("thread_id"),
-                json.dumps(payload, ensure_ascii=False, default=str),
-            )
         response = llm_with_tools.invoke(outbound, config=config)
+        tool_call_count = len(getattr(response, "tool_calls", None) or [])
         logger.info(
             "memory.agent.completed thread_id=%s response_type=%s tool_calls=%d",
             configurable.get("thread_id"),
             getattr(response, "type", type(response).__name__),
-            len(getattr(response, "tool_calls", None) or []),
+            tool_call_count,
         )
         return {"messages": [response]}
 
@@ -195,6 +176,12 @@ def create_async_agent_node(
     (``get_stream_writer()``) so ``astream(stream_mode="custom")`` surfaces
     real token-level output. Chunks are also aggregated locally so the node
     returns one AIMessage, identical in shape to the sync node's return value.
+
+    The per-call trace entry is *not* written here: ``call_trace``'s
+    ``LlmTraceHandler`` already recorded the request at
+    ``on_chat_model_start`` and finalizes it from ``on_llm_end``, which is
+    handed the message langchain-core merged from the very same chunks — so
+    recording again here would double every LLM call in the trace.
     """
 
     system_content = BASE_SYSTEM_PROMPT
@@ -303,8 +290,15 @@ def hitl_gate_node(state: MemoryGraphState, config: RunnableConfig) -> Dict[str,
     tool_calls = getattr(last_message, "tool_calls", None) or []
     pending = [c for c in tool_calls if _needs_confirmation(c.get("name"))]
     if not app_config.HITL_ENABLED or not pending:
+        call_trace.record_local(
+            "hitl_gate",
+            {"pending_tools": [c.get("name") for c in tool_calls], "interrupted": False},
+        )
         return {}
     names = ", ".join(c["name"] for c in pending)
+    call_trace.record_local(
+        "hitl_gate", {"pending_tools": [c["name"] for c in pending], "interrupted": True}
+    )
     answer = interrupt(
         {
             "question": f"即将调用外部工具 {names}，是否继续？",
@@ -328,6 +322,23 @@ def _count_recent_tool_calls(messages: Sequence[BaseMessage], tool_name: str) ->
     return count
 
 
+def _collect_recent_tool_results(
+    messages: Sequence[BaseMessage], tool_name: str
+) -> List[str]:
+    """Raw ToolMessage content for ``tool_name`` since the most recent
+    HumanMessage, oldest first (mirrors ``_count_recent_tool_calls``'s scan).
+    """
+    results: List[str] = []
+    for message in reversed(messages[:-1]):
+        if isinstance(message, HumanMessage):
+            break
+        if isinstance(message, ToolMessage) and message.name == tool_name:
+            content = message.content if isinstance(message.content, str) else str(message.content)
+            results.append(content)
+    results.reverse()
+    return results
+
+
 # One-off instruction for the forced finalize node (see create_route_after_hitl),
 # appended to BASE_SYSTEM_PROMPT only for that node — not baked into every turn.
 SEARCH_BUDGET_EXHAUSTED_NOTICE = (
@@ -344,49 +355,142 @@ SEARCH_BUDGET_EXHAUSTED_NOTICE = (
 # even with no `tools` schema attached to the request, especially once the
 # conversation history is full of prior tool_calls/ToolMessage turns — observed
 # in production as a raw `<tool_call><function=web_search>...` block reaching
-# the user. This is detected and retried once below; _LEAKED_TOOL_CALL_PATTERN
-# covers the formats seen so far.
+# the user, requesting yet another web_search. Asking again with a sterner
+# "don't do that" instruction was tried first and does NOT reliably fix it:
+# in one incident the model emitted the exact same `<tool_call><function=
+# web_search>...` block on all 3 plain-text attempts in a row, because it
+# genuinely still wanted another search, not because of a one-off formatting
+# slip. `_FinalAnswer`/``with_structured_output`` below is the actual fix
+# (see ``create_force_finalize_node``); ``_LEAKED_TOOL_CALL_PATTERN`` is kept
+# only as a defensive backstop in case the structured field itself somehow
+# still contains such markup.
 _LEAKED_TOOL_CALL_PATTERN = re.compile(
     r"<tool_call>|<function=|<\|python_tag\|>", re.IGNORECASE
-)
-SEARCH_BUDGET_RETRY_NOTICE = (
-    "Your previous reply contained function/tool-call formatted text, which "
-    "is not allowed here — there is no tool schema attached to this call, so "
-    "it cannot be executed and the user would just see broken syntax. Answer "
-    "again using only ordinary natural-language sentences, with no <tool_call> "
-    "or <function=...> markup of any kind."
 )
 SEARCH_BUDGET_FALLBACK_ANSWER = (
     "抱歉，多次搜索后仍未能整理出确定的回答，请换个问法或提供更具体的信息再试一次。"
 )
+
+# First attempt + this many retries before giving up — covers transient
+# provider/parsing errors on the structured-output call, not leak-formatting
+# flakiness (structured output is expected to eliminate that class of failure
+# structurally; see create_force_finalize_node). Still a bounded, mechanical
+# cap, not an unbounded retry loop.
+MAX_FINALIZE_ATTEMPTS = 3
+
+
+class _FinalAnswer(BaseModel):
+    """Schema the no-tools finalize call must emit instead of free text.
+
+    The model is tool-trained and, once ``web_search``'s budget is spent and
+    no tools are bound, still reliably "wants" to make a function call rather
+    than write plain prose — see the incident noted on
+    ``_LEAKED_TOOL_CALL_PATTERN`` above. Giving it exactly one legitimate
+    "tool" to call here (this schema, via ``llm.with_structured_output``)
+    channels that instinct into a structured, parseable result instead of
+    fighting it with a stronger prompt, which didn't hold up in practice.
+    """
+
+    answer: str = Field(
+        description=(
+            "The final answer for the user, in plain natural-language prose. "
+            "Synthesize it only from the search results already gathered in "
+            "this conversation (the ToolMessage content above). If some "
+            "requested detail isn't present in those results, say so plainly "
+            "instead of trying to search again — no more tools are available "
+            "for this reply."
+        )
+    )
+
+
+def _build_fallback_answer(messages: Sequence[BaseMessage]) -> str:
+    """Canned apology, plus any raw web_search results already gathered this
+    turn so a repeatedly-leaking synthesis step doesn't throw away good
+    search results the user could still use themselves.
+    """
+    raw_results = _collect_recent_tool_results(messages, "web_search")
+    if not raw_results:
+        return SEARCH_BUDGET_FALLBACK_ANSWER
+    joined = "\n\n".join(result[:800] for result in raw_results)
+    return (
+        f"{SEARCH_BUDGET_FALLBACK_ANSWER}\n\n"
+        f"以下是本轮搜索到的原始资料，供参考：\n\n{joined}"
+    )
 
 
 def create_force_finalize_node(llm: BaseChatModel):
     """Sync no-tools finalize node: produces the final answer once
     ``web_search``'s per-turn budget is spent (see ``create_route_after_hitl``).
 
-    Validates the response isn't leaked tool-call markup (see
-    ``_LEAKED_TOOL_CALL_PATTERN`` above) and retries once with a stronger
-    instruction if it is, falling back to a safe canned answer rather than
-    ever returning raw tool-call syntax to the user.
+    Uses ``llm.with_structured_output(_FinalAnswer)`` instead of a plain
+    completion — see ``_FinalAnswer`` above for why. ``_LEAKED_TOOL_CALL_PATTERN``
+    is still checked on the structured ``answer`` field as a defensive
+    backstop, and a provider/parsing error or a backstop hit is retried (up
+    to ``MAX_FINALIZE_ATTEMPTS`` total attempts) before falling back to a
+    safe canned answer plus any raw search results already gathered.
+
+    ``method="function_calling"`` is pinned explicitly rather than relying on
+    langchain-openai's default (``"json_schema"`` as of 0.3.0, i.e. OpenAI's
+    strict Structured Outputs ``response_format``): that default happens to
+    work against the NVIDIA-hosted endpoint this project currently targets,
+    but it is NOT reliably supported across OpenAI-compatible providers —
+    e.g. DeepSeek's Chat Completions endpoint only advertises plain
+    ``json_object`` mode (no schema enforcement, and occasionally returns
+    empty content per their own docs) and keeps strict ``json_schema``
+    behind a separate Beta Responses API/base URL. Tool/function calling,
+    by contrast, is the one structured-output mechanism broadly supported
+    everywhere this graph already depends on tool calling for (web_search,
+    calculator, search_memory), so pinning it here keeps a provider swap
+    from silently breaking this specific node.
     """
+    structured_llm = llm.with_structured_output(_FinalAnswer, method="function_calling")
 
     def force_finalize(state: MemoryGraphState, config: RunnableConfig) -> Dict[str, Any]:
+        thread_id = config.get("configurable", {}).get("thread_id")
         outbound = [
             SystemMessage(content=f"{BASE_SYSTEM_PROMPT}\n\n{SEARCH_BUDGET_EXHAUSTED_NOTICE}")
         ] + list(state["messages"])
-        response = llm.invoke(outbound, config=config)
-        if _LEAKED_TOOL_CALL_PATTERN.search(chunk_text(response)):
-            logger.warning(
-                "force_finalize.leaked_tool_call_syntax thread_id=%s",
-                config.get("configurable", {}).get("thread_id"),
-            )
-            response = llm.invoke(
-                outbound + [SystemMessage(content=SEARCH_BUDGET_RETRY_NOTICE)],
-                config=config,
-            )
-            if _LEAKED_TOOL_CALL_PATTERN.search(chunk_text(response)):
-                response = AIMessage(content=SEARCH_BUDGET_FALLBACK_ANSWER)
+        started = time.perf_counter()
+        failures: List[str] = []
+        answer_text: Optional[str] = None
+        for attempt in range(MAX_FINALIZE_ATTEMPTS):
+            try:
+                result = structured_llm.invoke(outbound, config=config)
+            except Exception as exc:  # noqa: BLE001 - provider/parsing hiccup, retry
+                failures.append(f"{type(exc).__name__}: {exc}"[:500])
+                logger.warning(
+                    "force_finalize.structured_output_failed attempt=%d thread_id=%s error=%s",
+                    attempt + 1,
+                    thread_id,
+                    failures[-1],
+                )
+                continue
+            candidate = result.answer if isinstance(result, _FinalAnswer) else str(result)
+            if _LEAKED_TOOL_CALL_PATTERN.search(candidate):
+                failures.append(candidate[:500])
+                logger.warning(
+                    "force_finalize.leaked_tool_call_syntax attempt=%d thread_id=%s preview=%s",
+                    attempt + 1,
+                    thread_id,
+                    failures[-1],
+                )
+                continue
+            answer_text = candidate
+            break
+        fell_back = answer_text is None
+        response = AIMessage(
+            content=_build_fallback_answer(state["messages"]) if fell_back else answer_text
+        )
+        call_trace.record_local(
+            "force_finalize",
+            {
+                "retried": len(failures) > 0,
+                "fell_back_to_canned_answer": fell_back,
+                "failures": failures,
+            },
+            status="error" if fell_back else "ok",
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
         return {"messages": [response]}
 
     return force_finalize
@@ -399,25 +503,59 @@ def create_async_force_finalize_node(llm: BaseChatModel):
     writing anything to the stream writer. Streaming token-by-token the way
     the normal agent node does would mean a leaked tool-call block is already
     on the user's screen by the time validation runs — too late to retry.
+
+    Uses ``llm.with_structured_output(_FinalAnswer)`` — see ``_FinalAnswer``
+    and ``create_force_finalize_node`` for why.
     """
+    structured_llm = llm.with_structured_output(_FinalAnswer, method="function_calling")
 
     async def force_finalize(state: MemoryGraphState, config: RunnableConfig) -> Dict[str, Any]:
         writer = get_stream_writer()
+        thread_id = config.get("configurable", {}).get("thread_id")
         outbound = [
             SystemMessage(content=f"{BASE_SYSTEM_PROMPT}\n\n{SEARCH_BUDGET_EXHAUSTED_NOTICE}")
         ] + list(state["messages"])
-        response = await llm.ainvoke(outbound, config=config)
-        if _LEAKED_TOOL_CALL_PATTERN.search(chunk_text(response)):
-            logger.warning(
-                "force_finalize.leaked_tool_call_syntax thread_id=%s",
-                config.get("configurable", {}).get("thread_id"),
-            )
-            response = await llm.ainvoke(
-                outbound + [SystemMessage(content=SEARCH_BUDGET_RETRY_NOTICE)],
-                config=config,
-            )
-            if _LEAKED_TOOL_CALL_PATTERN.search(chunk_text(response)):
-                response = AIMessage(content=SEARCH_BUDGET_FALLBACK_ANSWER)
+        started = time.perf_counter()
+        failures: List[str] = []
+        answer_text: Optional[str] = None
+        for attempt in range(MAX_FINALIZE_ATTEMPTS):
+            try:
+                result = await structured_llm.ainvoke(outbound, config=config)
+            except Exception as exc:  # noqa: BLE001 - provider/parsing hiccup, retry
+                failures.append(f"{type(exc).__name__}: {exc}"[:500])
+                logger.warning(
+                    "force_finalize.structured_output_failed attempt=%d thread_id=%s error=%s",
+                    attempt + 1,
+                    thread_id,
+                    failures[-1],
+                )
+                continue
+            candidate = result.answer if isinstance(result, _FinalAnswer) else str(result)
+            if _LEAKED_TOOL_CALL_PATTERN.search(candidate):
+                failures.append(candidate[:500])
+                logger.warning(
+                    "force_finalize.leaked_tool_call_syntax attempt=%d thread_id=%s preview=%s",
+                    attempt + 1,
+                    thread_id,
+                    failures[-1],
+                )
+                continue
+            answer_text = candidate
+            break
+        fell_back = answer_text is None
+        response = AIMessage(
+            content=_build_fallback_answer(state["messages"]) if fell_back else answer_text
+        )
+        call_trace.record_local(
+            "force_finalize",
+            {
+                "retried": len(failures) > 0,
+                "fell_back_to_canned_answer": fell_back,
+                "failures": failures,
+            },
+            status="error" if fell_back else "ok",
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
         writer({"kind": "token", "text": chunk_text(response)})
         return {"messages": [response]}
 
@@ -443,12 +581,21 @@ def create_route_after_hitl(max_calls_per_turn: int):
 
         search_count = _count_recent_tool_calls(state["messages"], "web_search")
         if search_count < max_calls_per_turn:
+            call_trace.record_local(
+                "search_budget_check",
+                {"search_count": search_count, "limit": max_calls_per_turn, "exhausted": False},
+            )
             return "tools"
 
         logger.warning(
             "search_budget.exhausted search_count=%d limit=%d",
             search_count,
             max_calls_per_turn,
+        )
+        call_trace.record_local(
+            "search_budget_check",
+            {"search_count": search_count, "limit": max_calls_per_turn, "exhausted": True},
+            status="error",
         )
         return "force_finalize"
 

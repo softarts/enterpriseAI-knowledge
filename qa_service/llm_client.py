@@ -19,6 +19,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
+from langchain_agent.app import call_trace
 from qa_service import config
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ def _build_llm() -> ChatOpenAI:
         logger.info("LLM thinking mode: %s", enable_thinking)
     # streaming=True 使 token 级回调生效，支撑 /api/chat/stream 的逐字输出；
     # 对非流式调用方（LCEL chain.invoke）无影响，LangChain 会自动聚合。
-    return ChatOpenAI(
+    kwargs: Dict[str, Any] = dict(
         model=config.LLM_MODEL,
         base_url=config.LLM_BASE_URL,
         api_key=config.LLM_API_KEY,
@@ -78,6 +79,13 @@ def _build_llm() -> ChatOpenAI:
         extra_body=extra_body,
         streaming=True,
     )
+    # Request/response (status code, retries) land in the Trace panel via
+    # call_trace's traced httpx clients — see langchain_agent/app/call_trace.py.
+    http_client, http_async_client = call_trace.build_traced_http_clients()
+    if http_client is not None:
+        kwargs["http_client"] = http_client
+        kwargs["http_async_client"] = http_async_client
+    return ChatOpenAI(**kwargs)
 
 
 _llm: Optional[ChatOpenAI] = None

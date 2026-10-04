@@ -296,6 +296,59 @@ POST /api/chat/stream  {question, token_scope}
   -> StreamEventMapper -> StreamEvent -> "data: {json}\n\n"
 ```
 
+### 前端 SSE 消费流程
+
+前端在 `chat_service/frontend/src/api/chatApi.js:61-89` 的 `consumeSSE()` 函数中读取 SSE 流：
+
+```javascript
+// chatApi.js:61-89
+async function consumeSSE(response, onEvent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Frames separated by "\n\n", parse each JSON payload
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const payload = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (!payload) continue;
+      try {
+        onEvent(JSON.parse(payload));  // 传给 onEvent 回调
+      } catch { /* ignore malformed frames */ }
+    }
+  }
+}
+```
+
+流程：
+1. **读取字节**：`response.body.getReader()` 逐块读取响应体
+2. **SSE 帧解析**：按 `\n\n` 分界符分割帧，提取 `data:` 行后的 JSON
+3. **事件回调**：每收到一个完整事件就调用 `onEvent(parsedEvent)` 回调
+
+**回调入口**：
+- `App.jsx:129` 中的 `handleSend()` 调用 `askQuestionStream(question, { onEvent: handleStreamEvent })`
+- 回调函数是 `App.jsx:45-108` 的 `handleStreamEvent(event)`，它根据 `event.type` 分发处理：
+  - `"token"` → 追加到当前消息气泡文本（`appendToStreaming`）
+  - `"tool_call"` → 添加到 timeline，状态为 `running`
+  - `"tool_result"` → 更新 timeline 中对应工具调用的结果和状态
+  - `"trace"` → 添加 trace 条目（llm/tool/http/local）到 timeline，按 `seq` 覆盖
+  - `"interrupt"` → 弹出 HITL 确认对话框
+  - `"done"` → 清除加载状态
+  - `"error"` → 显示错误消息
+
+后端和前端共用一套 SSE 协议，事件类型在 `stream_events.py` 中定义，前端按类型分流处理。
+
 ### 事件协议
 
 每帧是一个 JSON 对象，`type` 决定前端分流：
@@ -305,6 +358,14 @@ POST /api/chat/stream  {question, token_scope}
 {"type":"tool_call","id":"call_1","name":"web_search","args":{"query":"news"}}
 {"type":"tool_result","id":"call_1","name":"web_search","status":"ok","content":"..."}
 {"type":"node_start","node":"agent"}
+{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"pending","detail":{"request":{"messages":[...],"tools_bound":[...],"node":"agent"}},"duration_ms":null,"llm_call_id":"01a1..."}
+{"type":"trace","seq":1,"kind":"http","name":"llm_request","status":"pending","detail":{"method":"POST","url":"https://.../chat/completions","attempt":1,"headers":{...},"body":"{...}"},"duration_ms":null,"llm_call_id":"01a1..."}
+{"type":"trace","seq":1,"kind":"http","name":"llm_response","status":"ok","detail":{"method":"POST","url":"https://.../chat/completions","attempt":1,"status_code":200},"duration_ms":378.1,"llm_call_id":"01a1..."}
+{"type":"trace","seq":2,"kind":"tool","name":"web_search","status":"running","detail":{"arguments":{"query":"news"}},"duration_ms":null,"tool_call_id":"call_1"}
+// 同 seq 的 llm/tool 行会再发一次，status 从 pending/running 变成 ok/error，
+// detail 里补上聚合响应/工具结果和耗时；客户端应按 seq 覆盖同一行。
+{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"ok","detail":{"request":{...},"response":{"role":"assistant","content":"...","usage":{...}}},"duration_ms":812.4,"llm_call_id":"01a1..."}
+{"type":"trace","seq":2,"kind":"tool","name":"web_search","status":"ok","detail":{"arguments":{"query":"news"},"result":"Web search results..."},"duration_ms":1204.7,"tool_call_id":"call_1"}
 {"type":"interrupt","thread_id":"conv-1","question":"即将调用外部工具 web_search，是否继续？","resume_key":"conv-1:call_1","tools":[...]}
 {"type":"done","usage":{"input_tokens":812,"output_tokens":96},"finish_reason":"stop"}
 {"type":"error","message":"...","code":"upstream"}
@@ -313,7 +374,49 @@ POST /api/chat/stream  {question, token_scope}
 `finish_reason` 为 `interrupt` 表示本轮因 HITL 暂停（此时 `usage` 为 null）；
 流在 `done` 事件后结束，前端可无条件清除 loading 状态。
 
-### 三路 stream mode 的分工
+### 后端 stream event 生产流程（最小例子）
+
+在 `chat_service/services/chat/chat_stream.py` 中，`ChatStreamService._run()` 是核心驱动：
+
+```python
+# chat_stream.py:206-231（简化版，省略 finally 块）
+with call_trace.trace_scope() as call_entries:
+    async for mode, chunk in graph.astream(
+        inputs,
+        config=config,
+        stream_mode=["custom", "messages", "updates"],  # 三路 stream mode
+    ):
+        if mode == "custom":
+            events = mapper.map_custom(chunk)         # LLM token / tool_call
+        elif mode == "messages":
+            events = mapper.map_messages(chunk)       # node_start / AIMessage
+        elif mode == "updates":
+            events = mapper.map_updates(chunk)        # tool_result / interrupt
+            final_state = _absorb_updates(chunk, final_state, tool_messages)
+        else:
+            events = []
+        
+        # 插入本轮新增的 trace 条目（llm/tool/http/local），以及已被
+        # 原地 finalize 的旧条目（同 seq 覆盖）
+        for trace_event in drain.drain():
+            yield trace_event
+        
+        # 产生本 chunk 对应的事件
+        for event in events:
+            if event.type == "interrupt":
+                interrupted = True
+            yield event  # 发送到前端
+```
+
+**关键点**：
+- Line 208：`graph.astream(stream_mode=["custom","messages","updates"])` 触发图的异步流式执行
+- `async for mode, chunk in ...` 是 Python async 迭代，每收到一个 chunk（来自 LangGraph 的某个 stream mode），循环体就执行一次
+- `yield event` 把事件送出去，这是异步生成器（async generator）—— 每一次 `yield` 会**暂停**当前协程，释放 CPU 给事件循环处理其他任务（如网络 I/O、其他并发请求）
+- 框架（FastAPI + Starlette）负责把这些 `yield` 出来的事件转成 SSE 帧（通过 `event.to_sse()` 方法，见下面的路由层）
+
+后端的流程是：**LangGraph astream 驱动图执行 → 每 chunk 调一次 mapper 转事件 → 每个事件 yield 给前端（释放 CPU） → 流式接收端（前端）逐个处理**。
+
+#### 三路 stream mode 的分工
 
 LangGraph 的 token 有两条限制，因此需要同时消费三个通道：
 
@@ -330,115 +433,246 @@ LangGraph 的 token 有两条限制，因此需要同时消费三个通道：
 `token_scope`：`all`（默认）立即转发每轮 token；`final` 先缓冲，只有在没发生工具
 调用时才在结束时输出，避免把"决定调工具"那轮的中间文本暴露给用户。
 
-### HITL（人工确认）
-
-`langchain_agent` 图在 `agent` 与 `tools` 之间有 `hitl_gate` 节点，对
-`HITL_TOOLS`（默认 `web_search`）调用 `interrupt()`。默认开启，可用
-`HITL_ENABLED=false` 关闭。
-
-- 首轮流到 `HITL_TOOLS` 里的工具时暂停，发送 `interrupt` 事件，**工具不执行**
-- 前端确认后调 `POST /api/chat/resume`（body `{"resume": true|false}`），
-  后端用 `Command(resume=...)` 从同一 checkpoint 的中断点继续，不重复已发出的
-  LLM 调用
-- 中断状态存在 Checkpointer 中；进程重启会丢失（当前为进程内 `MemorySaver`）
-
-`web_search` 默认**自动执行、不弹确认框**（`WEB_SEARCH_AUTO_EXECUTE=true`，
-见 `langchain_agent/app/config.py`）：`hitl_gate_node` 在决定哪些 pending
-tool_call 需要确认时，会对 `name == "web_search"` 且该开关为真的调用直接放行。
-把 `WEB_SEARCH_AUTO_EXECUTE=false` 可以恢复“每次搜索都要手工确认”的旧行为，
-而不影响 `HITL_TOOLS` 里其他工具（如果以后加进去）的确认逻辑。
-
-### `should_continue` 路由机制（会不会一直调用工具？）
-
-`should_continue`（`langchain_agent/app/graph.py`）是 `agent` 节点之后的路由函数，
-逻辑是纯语法判断，不涉及任何"调用了几次""该不该继续"的语义：
+#### 路由层转 SSE（chat_service/api/routes_chat.py:120-135）
 
 ```python
-def should_continue(state):
-    last_message = state["messages"][-1]
-    if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        return "tools"
-    return "update_memory"
+async def event_stream():
+    task = asyncio.current_task()
+    if task is not None:
+        _ACTIVE_STREAMS[conversation_id] = task
+    try:
+        async for event in _chat_stream_service.stream_turn(...):
+            if await raw_request.is_disconnected():
+                logger.info("chat.stream.client_disconnected id=%s", conversation_id)
+                break
+            yield event.to_sse()  # StreamEvent -> "data: {...}\n\n"
 ```
 
-只要这一轮模型返回的 `AIMessage` 带 `tool_calls`（不管是 `web_search`、
-`calculator` 还是 `search_memory`，也不管这是第几次），就无条件路由到
-`tools` 去执行；模型这一轮不带 `tool_calls`（给出纯文本回答），才路由到
-`update_memory` 结束。
+每个 `event` 都被转成 SSE 文本帧 `"data: {json}\n\n"`，由 `StreamingResponse` 推送给客户端。
 
-这意味着 **如果模型自己反复决定要调用同一个工具，`should_continue` 本身完全不会
-拦截**——它会一直放行，图沿着 `agent -> hitl_gate -> tools -> agent` 这条边
-不断循环，直到下面两道防线之一起作用：
 
-1. **全局步数上限**（见下一节 `AGENT_MAX_STEPS_*`）：不管反复调用的是哪个工具，
-   图的总步数撞线后 LangGraph 直接抛 `GraphRecursionError`，对话被中断、返回
-   错误提示——这是"压线崩溃"式兜底，不会让模型体面地给出回答。
-2. **`web_search` 专属预算**（见下一节 `WEB_SEARCH_MAX_CALLS_PER_TURN`）：
-   `hitl_gate` 之后的 `create_route_after_hitl` 统计本轮 `web_search` 的调用
-   次数，达到上限后不再路由到 `tools`，改路由到 `force_finalize`，模型物理上
-   发不出新的 `web_search` 调用，被迫用已有信息给出文字回答。
 
-**已知局限**：预算机制目前只盯 `web_search` 这一个工具。如果模型反复调用的是
-`calculator`、`search_memory` 等其它工具，`should_continue` 和 `hitl_gate` 都不
-会拦截，只能靠第 1 道全局步数上限兜底（表现为对话被中断而不是正常回答）。按
-`AGENTS.md` 里定的规则，任何会被反复调用的工具都该有自己的硬性预算——目前只
-有 `web_search` 补齐了，其它工具仍是"裸奔"状态，是已知的后续工作项。
+### LLM / 工具 / HTTP / 本地函数 trace
 
-### Agent 最大步数（防止死循环）
+Trace 面板现在能看到四类条目，明确区分开（`kind` 字段）：
 
-图在 `agent -> hitl_gate -> tools -> agent` 之间循环，直到模型不再请求工具调用。
-如果模型反复用越来越离谱的 query 调同一个工具（例如不断把 `web_search` 的
-`query` 参数越拼越长），图会无限循环下去。两个入口各有一个独立的步数上限，
-超限时 LangGraph 抛 `GraphRecursionError`，由入口捕获并转成友好提示（流式是
-`{"type":"error","code":"recursion_limit"}` SSE 事件，非流式是一句中文提示），
-不会让请求挂起：
+- `kind: "llm"` —— **一次 LLM 调用一条**，带这次调用的 request 和**聚合后**
+  的 response。由 `call_trace.LlmTraceHandler` 从 LangChain 自己的
+  `on_chat_model_start` / `on_llm_end` 回调里取，所以无论 provider 在 wire
+  上是不是流式返回、返回多少个 chunk，这次调用只产生一条记录，内容就是这轮
+  对话该次调用的完整 payload（含 `tool_calls`、`usage_metadata`、
+  `finish_reason`）。request 里还带 `tools_bound`（本轮绑定了哪些工具）、
+  `node`（由哪个图节点发起）、`stream`（是否走 SSE）。
+- `kind: "tool"` —— 一次**工具执行**一条，来自 `on_tool_start` /
+  `on_tool_end`，带 `arguments` / `result` / 耗时。这是唯一能看到
+  `web_search` 的层：它走 `langchain_tavily`，底层是 `requests`/`aiohttp`，
+  不是 httpx，所以下面 `kind: "http"` 的钩子对它完全不触发——之前搜索请求对
+  trace 是隐形的。
+- `kind: "http"` —— 发往/收到 **云端 LLM API** 的真实 HTTP request/response，
+  每次实际尝试各一条，带 `method`/`url`/`status_code`/`attempt`；OpenAI SDK
+  内部触发的**重试**会产生新的一对 `attempt` 更高的条目，不需要额外的重试
+  跟踪逻辑——这就是 httpx 的 `event_hooks` 天然给的。request 条目现在**会记录
+  出站 body**（httpx 把它存为可重放的 `ByteStream`，在 hook 里读不会消费掉
+  LangChain 需要的东西），所以这里能看到**真实** wire payload，包括
+  langchain-openai 内部补上的 `stream`/`stream_options`——本地重建的请求体
+  预览是看不到这些的。仍然**不读取 response body**：chat-completion 调用走 SSE
+  流式返回，在 hook 里读会把流"偷走"，让 LangChain 自己的消费者拿不到内容；
+  聚合后的回答改由上面的 `kind: "llm"` 记录。
+- `kind: "local"` —— 图里各节点的函数级 span（`hitl_gate`、
+  `search_budget_check`、`force_finalize`），带耗时和与该节点决策相关的小
+  detail（例如 `search_budget_check` 带上 `search_count`/`limit`/`exhausted`）。
 
-| 环境变量 | 默认值 | 作用入口 |
-|---|---|---|
-| `AGENT_MAX_STEPS_SYNC` | `10` | `/api/chat`（`langchain_agent/app/runtime.py` 的 `GRAPH_RECURSION_LIMIT`） |
-| `AGENT_MAX_STEPS_STREAM` | `25` | `/api/chat/stream`（`chat_service/services/chat/chat_stream.py` 的 `RECURSION_LIMIT`） |
+`agent` 节点**不再**自己记录 span：以前它在节点里手搓 `"".join(parts)` 聚合
+chunk 再 `record_local("agent", ...)`，那等于把 langchain-core 已经做过的
+合并重做一遍（而且重做出来的 request body 预览缺少 `stream` 等内部字段）。
+现在改由回调提供聚合结果，`agent`/`force_finalize`/`update_memory` 的归属
+信息保留在 `kind: "llm"` 条目的 `detail.request.node` 里。
 
-类似 Copilot VS Code 插件里对一次请求的最大工具调用轮数做硬性限制。
+### `llm` 和 `http` 两条的关系：不是重复，是两层
 
-### `web_search` 每轮调用预算（防止同一工具反复重试）
+一次 LLM 调用会产生**三条** trace（一次 `llm` + 一对 `http`），它们回答的是
+不同问题，靠 `llm_call_id` 串起来：
 
-`AGENT_MAX_STEPS_*` 限的是整张图的步数，撞线后直接中断并返回错误提示，属于
-“压线崩溃”兜底，不是让模型体面地停下来回答。同一个工具（典型如
-`web_search`）在一轮对话里被反复用稍微变化的 query 调用、却迟迟给不出答案，
-正是这次排查的死循环场景——撞到 `AGENT_MAX_STEPS_*` 之前已经浪费了好几轮。
+| 条目 | 谁记的 | 回答什么 | 有没有 payload |
+|---|---|---|---|
+| `llm_call` | `on_chat_model_start` / `on_llm_end` | **模型说了什么**：合并后的回答、`tool_calls`、`usage`、`finish_reason` | 有（聚合后的语义） |
+| `llm_request` | httpx `request` hook | **实际发出去什么**：method/url/headers/**原始 body** | 有（wire 上的原文 JSON） |
+| `llm_response` | httpx `response` hook | **网络层发生了什么**：attempt、status_code、耗时 | 没有 body（见下） |
 
-`WEB_SEARCH_MAX_CALLS_PER_TURN`（默认 `3`，定义在 `langchain_agent/app/config.py`，
-与 `AGENT_MAX_STEPS_*` 在一起）是更细粒度的单工具预算：`hitl_gate` 之后的路由函数
-`create_route_after_hitl`（`langchain_agent/app/graph.py`）统计自上一条用户消息
-以来 `web_search` 已被调用的次数，一旦达到上限且模型还想再调 `web_search`，就不再
-路由到 `tools`，而是路由到 `force_finalize`——一个**不绑定任何工具**的节点（模型
-此时物理上发不出结构化的 `tool_call`），然后路由到 `update_memory` 结束本轮。不是
-靠一句"请停止搜索"的提示语指望模型自觉配合（这类纯提示型兜底已被证实不可靠，
-模型会无视提示继续重试），而是机制上直接拿掉继续调用的可能性。
+`llm_request.body` 和 `llm_call` 的 request **不是同一份东西**，各有不可替代的
+信息：
 
-实现 `force_finalize` 时踩过两个坑，都已修掉：
+- `llm_call` 的 request 是 LangChain **侧**重建的摘要（消息列表 + 工具名 +
+  `stream` 开关），可读性好，但没有 `stream_options`、没有真实的 tool schema JSON。
+- `llm_request.body` 是 httpx 上**真正的字节**，因此含 langchain-openai 内部
+  补上的字段（`stream`、`stream_options`）和逐字的 tool 定义。想复现"模型为什么
+  不调工具"，只能看这条。
 
-1. **强制回答一度完全不显示**：最初在一个独立节点里同步调用 `llm.invoke()`，
-   生成的文字确实进了最终状态，但从未经过流式 token 通道（`get_stream_writer()`），
-   前端什么都看不到。
-2. **"不绑定工具"不代表模型不会吐工具调用格式的文本**：换用 NVIDIA 托管的模型
-   实测后发现，即使这次请求完全没有带 `tools` schema，模型仍然会把它学到的
-   工具调用语法原样当成普通文本吐出来（例如一整段
-   `<tool_call><function=web_search>...` 直接显示在屏幕上），尤其是当对话历史
-   里已经有大量真实的 tool_calls/ToolMessage 轮次时。
+`llm_response` 没有 body 是**刻意的**：chat-completion 走 SSE 流式返回，在
+response hook 里读 body 会把流偷走，让 LangChain 自己的消费者拿不到内容。聚合后
+的回答由 `llm_call` 那条提供，所以信息并没有丢。
 
-现在 `create_force_finalize_node`（同步）/ `create_async_force_finalize_node`
-（流式）会先完整拿到模型的回复，用 `_LEAKED_TOOL_CALL_PATTERN` 检测是否混入了
-`<tool_call>`/`<function=...>` 这类泄漏的工具调用标记；命中就换一句更强硬的指令
-重试一次；再不行就返回一句固定的道歉文案（`SEARCH_BUDGET_FALLBACK_ANSWER`），
-绝不会把原始的工具调用语法展示给用户。流式场景下这意味着这一步**不是**真正的
-逐字符流式输出——而是先在后端攒齐、校验通过后一次性写入 token 通道——这是为了
-正确性特意做的取舍，只影响这一个"预算耗尽后强制收尾"的节点，正常回答仍然是
-逐字符流式的。
+`llm_call_id` 的串联方式：`on_chat_model_start` 把当前最内层 run_id 写进
+ContextVar → httpx `request` hook 读到后盖到 request 的 extensions →
+`response` hook 再读回来。所以同一次调用的三条 trace 带同一个 `llm_call_id`
+（OpenAI SDK 内部重试会产生 attempt 更高的一对，同样归到同一个 id 下）。
 
-| 环境变量 | 默认值 | 作用 |
-|---|---|---|
-| `WEB_SEARCH_MAX_CALLS_PER_TURN` | `3` | 单轮对话内 `web_search` 的最大调用次数，超限后强制无工具终结回答 |
+实现见 `langchain_agent/app/call_trace.py`：一个 `contextvars.ContextVar`
+按"一轮对话"作用域收集条目（`trace_scope()`），`LlmTraceHandler`（通过
+`build_trace_callbacks()` 挂到 `graph.astream/invoke` 的 `config["callbacks"]`）
+负责 `llm`/`tool` 两类，`record_local(...)` 供图节点记录决策类 span，
+`build_traced_http_clients()` 返回挂了 `event_hooks` 的
+`httpx.Client`/`httpx.AsyncClient`，传给 `langchain_agent/app/config.py` 的
+`get_chat_model()` 和 `qa_service/llm_client.py` 的 `_build_llm()`（这两处是
+聊天图实际用到的两个 `ChatOpenAI` 构造点）。`Authorization`/`api-key` 请求头
+在落入 trace 前就地替换成 `"***"`，不会有密钥泄漏到前端或日志。
+
+两个入口的接入方式不同：
+
+- 非流式 `/api/chat`：`ChatService.ask()` 用 `call_trace.trace_scope()` 包住
+  `generate_answer_with_memory(...)` 整次调用，结束后把收集到的条目逐一
+  `trace.add_step(kind=..., ...)` 插入 `TraceBuilder`，和原有的 `request`/
+  `llm`/`response` 步骤按时间顺序混在同一个 `steps` 列表里。
+- 流式 `/api/chat/stream`：**不是**等到整轮跑完才一次性抽干。
+  `call_entries` 是 `call_trace.trace_scope()` 返回的同一个列表，图节点跑的
+  时候（回调/`record_local`/httpx hook）会原地往里 append；`ChatStreamService._run`
+  在 `graph.astream(...)` 的主循环里，每收到外层的一个 chunk 就先
+  `drain.drain()` 一次，再发这个 chunk 自己的事件，循环结束后再抽干一次收尾。
+  这保证了真实的时间顺序：一轮 `agent` 节点里，HTTP 请求/响应发生在
+  `llm_with_tools.astream()` 真正开始流式返回内容之前，所以 `llm_request`/
+  `llm_response` 两条会先于该轮的 `tool_call` 事件出现——而不是像最初实现那样，
+  所有 trace 条目都在最后一次性堆在 `tool_call`/`tool_result` 后面，顺序和
+  实际发生顺序对不上。
+
+`llm`/`tool` 条目是**先 provisional 后 finalize**的：`on_chat_model_start` 时先
+追加一条 `status="pending"` 的条目（这样它在时间线上的位置就是这次调用真正的
+位置），`on_llm_end` 再**原地**补上聚合响应和耗时。为了让流式 UI 能感知这种
+"就地更新"，`chat_stream.py` 的 `_TraceDrain` 会把已抽干但状态发生变化的条目
+**再发一次**（`seq` 不变），前端按 `seq` 覆盖同一行而不是追加。`trace` 事件因此
+带一个稳定的 `seq` 字段（该条目在本轮 sink 里的下标）。
+
+#### 一次 web_search 回合的真实顺序（别被行数骗了）
+
+问题 `pura x view 用的是什么芯片` 的实际事件顺序（实测）：
+
+```
+ 1. llm      llm_call   (pending)  ← 模型这次调用开始了
+ 2. node_start agent
+ 3. tool_call web_search            ← 模型"决定"搜索（custom 通道）
+ 4. llm      llm_call   (ok)        ← 同一次调用 finalize，response.tool_calls 里有 web_search
+ 5. local    hitl_gate              ← HITL 闸门（web_search 默认自动放行，不 interrupt）
+ 6. local    search_budget_check    ← 预算检查：还没超，继续走 tools
+ 7. node_start tools
+ 8. tool     web_search (ok)        ← 工具"真的执行"了
+ 9. node_start agent
+10. llm      llm_call   (pending)  ← 带着 ToolMessage 再问模型一次
+11. token    ...
+12. llm      llm_call   (ok)
+13. node_start update_memory
+14. tool_result web_search
+15. done
+```
+
+关键点，也是最容易被误读的地方：
+
+- **第 3 行和第 8 行不是同一个东西。** 第 3 行是模型在 `custom` 通道上"请求"
+  调用 web_search；第 8 行是 `on_tool_end` 记下的"执行完成"。**一次调用一条
+  `tool` 行**，所以看起来像"出现了两次 web_search"，其实是"决定"和"执行"各一次。
+  界面上已加提示：展开 `llm_call` 会看到
+  `↳ This call requested a tool`，并说明下面的 `tool` 行是执行而非第二次调用。
+- **`llm_request` 里确实有 tools schema。** 实测 `_get_request_payload` 产出的
+  顶层键是 `['messages','model','stream','tools']`，`tools` 里是完整的 function
+  定义。之前"看不到"是因为 UI 没渲染——现在 `llm_request` 行有
+  **Request Body** 段落（标注 *as sent on the wire*），可展开/收起。
+- **`hitl_gate` / `search_budget_check` 不是"又一次搜索"。** 它们是图节点做的
+  两个纯决策 span，夹在"决定调用"和"执行"之间：闸门放行、预算够用，于是
+  路由到 `tools`。
+
+**还有第四种截断**：`tool` 行里的 result 是**模型实际看到的那份文本**。`web_search`
+在 `tool_layer.py` 里用 `MAX_WEB_SEARCH_CHARS = 2000` 截断后才交给模型——这是
+**模型输入预算**，不是 trace 预算。trace 忠实地记录模型收到的东西（排查"为什么
+答得不对"时该看的正是这个数）。界面在检测到 `...[truncated]` 时会明确提示，
+以免看起来像 trace 把它截了。
+
+**如果 `TAVILY_API_KEY` 没配**，`web_search` 会返回
+`Tool failed: TAVILY_API_KEY is not configured`，在 `tool` 行里一眼可见。
+
+#### 两条不能踩的坑
+
+**① `trace` 的标识字段必须是字符串。** LangChain 传给回调的 `run_id` 是
+`uuid.UUID` **对象**（不是 str）。它会经 `llm_call_id`/`tool_call_id` 进入 SSE
+帧，`json.dumps` 遇到 UUID 会抛
+`TypeError: Object of type UUID is not JSON serializable`。而这个异常发生在
+Starlette 的 **ASGI send 路径**里——不是"某一帧丢了"，而是整个响应被中断，
+且此时 `trace_scope` 的 `ContextVar` 清理又会在另一个 task 里触发第二个异常，
+最终变成两段互不相干的 traceback，真正的首因被埋掉。因此：
+`LlmTraceHandler` 在入口一律 `str(run_id)`；`StreamEvent.to_sse()` 另外带
+`default=str` 兜底——**纯诊断字段永远不该弄死一个响应**。
+
+**② `ContextVar.reset()` 只能在创建它的 Context 里调用。** SSE 的 body
+iterator 是一个跨 `yield` 挂起的生成器；客户端断开（或某帧序列化失败）时，
+Starlette 的 task group 会在**另一个 task** 里 finalize 它，于是 `trace_scope`
+的 `finally` 在另一个 Context 执行，`reset()` 抛
+`ValueError: ... was created in a different Context`。丢掉这次 reset 是无害的
+（设置它的那个 Context 本来就要被丢弃），所以 `trace_scope` 捕获并降级。
+
+> 这两条都有回归测试：
+> `test_sse_frame_survives_non_serializable_values`、
+> `test_identifiers_are_strings_so_frames_stay_serializable`、
+> `test_abandoned_stream_does_not_raise_on_scope_teardown`。
+> 注意最后一条必须跑在**活着的 loop** 上并从另一个 task 关闭生成器——用
+> `asyncio.run` 时，loop 关停会就地 cancel 掉挂起的生成器，不会跨 Context，
+> 于是**带着 bug 也能通过**。
+
+前端：`App.jsx` 的 `timeline` 状态把 `tool_call`/`tool_result`/`trace`
+三类事件按到达顺序合并成一条时间线，交给 `TracePanel`；`trace` 事件按 `seq`
+覆盖（provisional → finalized）。`StepRow` 的 `KindPill` 现在渲染
+`LLM`/`TOOL`/`HTTP`/`LOCAL` 四种小胶囊（此前 `kind:"tool"` 被显式隐藏，且
+CSS 里根本没有 `--tool`/`--llm` 配色）；`kind:"llm"` 用专门的
+`LlmCallStepDetail` 渲染 node/tools_bound/request/聚合响应/tool_calls，
+`kind:"http"` 用 `HttpStepDetail`，其余走通用的 `JSON.stringify` 兜底。
+
+#### 写入日志文件（`logs/chat_service.log`）
+
+`chat_service/run.py` 现在同时往 console 和 `logs/chat_service.log`（仓库根目录
+下，`RotatingFileHandler`，20MB × 5 份）写日志；`logs/` 已加进 `.gitignore`。
+每条 `call_trace` 条目（四种 kind 都算）在被塞进 trace sink 的同一
+时刻，也会以 `call_trace.entry [conversation-xxxx] {json}` 的格式打一条 INFO
+日志——所以即使这次
+请求最终没有通过 UI 看到（例如客户端提前断开、或者只是单纯想离线分析一次失败
+请求），仍然能直接从日志文件里用 `grep` 还原出完整的 LLM/工具/HTTP/本地函数
+时间线，不需要复现一遍。`llm`/`tool` 条目在 finalize 时会**再打一次**，
+所以日志里能看到同一 `llm_call_id` 的 pending 行和 ok 行（后者带聚合响应）。
+`force_finalize` 泄漏检测命中时的 WARNING 日志（见上一节）也
+会落进同一个文件。
+
+任何记录失败都不会影响真实请求——`record_local`/`record_tool`/回调处理
+内部全部 `try/except`，纯诊断用途。
+
+**payload 不截断。** 请求体、聚合回答、工具结果都**全文保留**：trace 是排查
+工具，一个被悄悄截短的 payload 比一个长 payload 更糟——你无法区分"被截断"
+和"本来就这么短"。只有异常文本按 `MAX_ERROR_CHARS`（500）截断，因为
+`str(exc)` 可能任意长且没有额外信息量。前端负责可读性：`RawOutput` 在超过
+600 字符时默认折叠，显示 `展开全部 / 收起` 和总字符数，Copy 永远复制全文。
+
+#### 每条 trace 都带 conversation id
+
+多轮对话会在同一个日志文件、同一条 UI 时间线里交错，所以每条 trace entry
+都带 `conversation_id`（由 `trace_scope(conversation_id=...)` 盖上，见
+`chat_service.py` 与 `chat_stream.py` 的调用点）：
+
+- **日志**：`call_trace.entry [conversation-ae17acaa] {json}` —— 前缀是
+  conversation id 的可读头（`conversation-<uuid>` 取前 8 位），可以直接
+  `grep conversation-ae17`，不必解析 JSON；完整 id 也在 JSON 里。
+- **SSE `trace` 事件**：带 `conversation_id` 字段。
+- **前端**：聊天窗口顶部显示当前 conversation id（`title` 属性是完整值）并
+  提供 **New** 按钮开新对话（后端按 id 隔离短期记忆，所以新 id = 下一问干净
+  开始）；Trace 面板标题和每一行也都显示这个 id（截断显示，`title` 保留全文），
+  这样从日志里粘出来的 trace 仍然可归属。
+- **New 是归档不是丢弃**：点 New 时当前 trace 会被快照进 `archivedTraces`
+  （最多 `MAX_ARCHIVED_TRACES = 5` 条），在面板下方**折叠**保留，随时展开查看。
+  上一轮 trace 通常正是你开新对话的原因，不该被抹掉。聊天消息本身也保留，
+  只有"下一问从哪开始"的记忆上下文被重置。
 
 ### 流式相关 API
 
@@ -458,7 +692,7 @@ Checkpointer 恢复。
 气泡，interrupt 弹确认框，done 结束 loading。
 
 `tool_call`/`tool_result` **不**渲染在聊天窗口里——聊天窗口只显示最终回答
-（以及 error 消息和 HITL 确认框）。这两类事件被收进 `toolCards` 状态，
+（以及 error 消息和 HITL 确认框）。这两类事件被收进 `timeline` 状态，
 `App.jsx` 据此拼出一个 `{steps:[...]}` 形状的 trace 对象传给右侧
 `TracePanel`（和非流式 `/api/chat` 的 `trace` 复用同一个组件/同一套
 `trace-step` 展现逻辑），每个工具调用显示为一个可展开的 step，状态为
@@ -479,10 +713,26 @@ npm install
 npm run dev
 ```
 
+## ChatService 与非流式 `/api/chat` 是否废弃
+
+**否**。`ChatService.ask()` 仍然在使用：
+
+- 路由：`chat_service/api/routes_chat.py:58-79` 的 `@router.post("/api/chat")` 
+- 实现：`chat_service/services/chat/chat_service.py:34-165` 的 `ChatService.ask()`
+- 用途：非流式单次问答，返回 `{answer, trace, error}` JSON 对象
+
+非流式与流式的选择：
+- 非流式 `/api/chat` — 适合单纯的问答，收完答案再一次性返回；同步 Python 实现
+- 流式 `/api/chat/stream` — 适合实时 token 展示、长回答、工具调用过程可见；异步 Python + SSE
+
+前端主聊天界面（`App.jsx`）目前**只使用** `/api/chat/stream`（见 `App.jsx:129`），
+但 `ChatService` 仍是备选方案，也许被其他客户端或非浏览器场景使用。两个实现都走同一套
+Checkpointer、LangGraph 图和 LLM 客户端，只是一个等答案做完再返，一个边跑边推流。
+
 ## 当前边界
 
 taxonomy 仍由 `kb_classifier` 提供，chat_service 不修改 taxonomy 版本、阈值或匹配
-算法。文档导入已接入 embedding 和 ChromaDB；`/api/chat` 使用短期 Checkpointer，
+算法。文档导入已接入 embedding 和 ChromaDB；`/api/chat` 和 `/api/chat/stream` 都使用短期 Checkpointer，
 不执行 RAG。RAG 仍由独立的 `/api/ask` 提供。
 
 流式端点依赖 langchain-core 1.x / langgraph 1.x（`get_stream_writer` 与

@@ -1,11 +1,17 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Layout from "./components/Layout.jsx";
 import ChatWindow from "./components/ChatWindow.jsx";
 import AskWindow from "./components/AskWindow.jsx";
 import ImportPage from "./components/ImportPage.jsx";
 import BrowsePage from "./components/BrowsePage.jsx";
 import TaskPage from "./components/TaskPage.jsx";
-import { askQuestionStream, cancelStream, resumeStream } from "./api/chatApi.js";
+import {
+  askQuestionStream,
+  cancelStream,
+  getConversationId,
+  newConversationId,
+  resumeStream,
+} from "./api/chatApi.js";
 import { askWithRAG } from "./api/askApi.js";
 
 // Top-level state: active view, messages, loading, trace, pane collapse.
@@ -18,10 +24,20 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [askTrace, setAskTrace] = useState(null);
   const chatRequestRef = useRef(null);
+  // Which conversation the visible history belongs to. Backend rows carry
+  // their own id; this covers the header and messages sent before the first
+  // trace row exists.
+  const [conversationId, setConversationId] = useState(() => getConversationId());
 
-  // Streaming state: the in-flight assistant message index, tool cards and
-  // any pending HITL confirmation.
-  const [toolCards, setToolCards] = useState([]);
+  // Streaming state: the in-flight assistant message index, the ordered
+  // activity timeline (tool_call/tool_result + trace entries, in arrival
+  // order) feeding the Trace panel, and any pending HITL confirmation.
+  const [timeline, setTimeline] = useState([]);
+  // Traces from earlier conversations, kept so starting a new conversation
+  // archives rather than discards them. Each entry is a self-contained
+  // {conversation_id, steps} snapshot.
+  const [archivedTraces, setArchivedTraces] = useState([]);
+  const [activeTraceOpen, setActiveTraceOpen] = useState(true);
   const [pendingInterrupt, setPendingInterrupt] = useState(null);
   const streamingIndexRef = useRef(null);
 
@@ -49,19 +65,53 @@ export default function App() {
       case "node_start":
         break; // reserved for step indicators
       case "tool_call":
-        setToolCards((prev) => [
+        setTimeline((prev) => [
           ...prev,
-          { id: event.id, name: event.name, args: event.args, status: "running" },
+          {
+            kind: "tool",
+            id: event.id,
+            name: event.name,
+            args: event.args,
+            status: "running",
+          },
         ]);
         break;
       case "tool_result":
-        setToolCards((prev) =>
-          prev.map((card) =>
-            card.id === event.id
-              ? { ...card, status: event.status, content: event.content }
-              : card
+        setTimeline((prev) =>
+          prev.map((item) =>
+            item.kind === "tool" && item.id === event.id
+              ? { ...item, status: event.status, content: event.content }
+              : item
           )
         );
+        break;
+      case "trace":
+        // Aggregated LLM calls (kind "llm", carrying the real request and the
+        // merged response), tool executions (kind "tool"), the httpx
+        // request/response attempts (kind "http") and local node spans
+        // (kind "local"). Keyed by the backend's stable `seq`: LLM and tool
+        // rows arrive twice — once while still in flight, once finalized —
+        // and the second one replaces the first.
+        if (event.conversation_id) setConversationId(event.conversation_id);
+        setTimeline((prev) => {
+          const row = {
+            seq: event.seq,
+            kind: event.kind, // "llm" | "tool" | "http" | "local"
+            name: event.name,
+            status: event.status,
+            detail: event.detail,
+            durationMs: event.duration_ms,
+            conversationId: event.conversation_id,
+            llmCallId: event.llm_call_id,
+            toolCallId: event.tool_call_id,
+          };
+          if (row.seq == null) return [...prev, row];
+          const at = prev.findIndex((item) => item.seq === row.seq);
+          if (at === -1) return [...prev, row];
+          const next = [...prev];
+          next[at] = row;
+          return next;
+        });
         break;
       case "interrupt":
         setPendingInterrupt({
@@ -96,7 +146,7 @@ export default function App() {
     // The assistant placeholder is the last message.
     streamingIndexRef.current = null;
     setLoading(true);
-    setToolCards([]);
+    setTimeline([]);
     setPendingInterrupt(null);
 
     // Resolve the placeholder index after the state update is queued.
@@ -134,6 +184,39 @@ export default function App() {
       // Also stop the server-side graph run.
       cancelStream();
     }
+    setLoading(false);
+    streamingIndexRef.current = null;
+  }
+
+  // Start a new conversation: fresh id, empty timeline. The visible messages
+  // are left alone so the previous turn stays readable — the backend keys
+  // short-term memory by conversation id, so the next question starts clean.
+  // The outgoing trace is *archived* (collapsed in the panel), not discarded:
+  // it is usually the reason you started a new conversation in the first
+  // place, and it stays attributable to its own conversation id.
+  function handleNewConversation() {
+    if (chatRequestRef.current) {
+      chatRequestRef.current.abort();
+      chatRequestRef.current = null;
+      cancelStream();
+    }
+    if (timeline.length > 0) {
+      const snapshot = buildTraceFromTimeline(timeline);
+      setArchivedTraces((prev) =>
+        [
+          ...prev,
+          {
+            key: `${snapshot.conversationId}-${prev.length}`,
+            conversationId: snapshot.conversationId,
+            trace: snapshot,
+          },
+        ].slice(-MAX_ARCHIVED_TRACES)
+      );
+    }
+    setConversationId(newConversationId());
+    setTimeline([]);
+    setActiveTraceOpen(true);
+    setPendingInterrupt(null);
     setLoading(false);
     streamingIndexRef.current = null;
   }
@@ -197,26 +280,55 @@ export default function App() {
     }
   }
 
-  // Tool call/result activity is shown in the Trace panel, not inline in the
-  // chat window — the chat window should only show the final answer.
-  const chatTrace =
-    toolCards.length > 0
-      ? {
-          steps: toolCards.map((card) => ({
-            name: card.name,
-            status:
-              card.status === "running"
-                ? "running"
-                : card.status === "error"
+  // How many finished conversations' traces to keep collapsed in the panel.
+// Bounded because each one holds full request/response payloads.
+const MAX_ARCHIVED_TRACES = 5;
+
+// Convert the event timeline into the `{steps}` shape TracePanel renders.
+// Shared by the live trace and the archived snapshots so both render
+// identically.
+function buildTraceFromTimeline(timeline) {
+  return {
+    conversationId:
+      timeline.find((item) => item.conversationId)?.conversationId || null,
+    steps: timeline.map((item) => {
+      if (item.kind === "tool" && item.toolCallId && !item.detail) {
+        // Legacy tool_call/tool_result pair from the graph, not a call_trace
+        // "tool" entry.
+        return {
+          kind: "tool",
+          name: item.name,
+          status:
+            item.status === "running"
+              ? "running"
+              : item.status === "error"
                 ? "error"
                 : "ok",
-            detail: {
-              args: card.args,
-              ...(card.content ? { result: card.content.slice(0, 2000) } : {}),
-            },
-          })),
-        }
-      : null;
+          detail: {
+            args: item.args,
+            ...(item.content ? { result: item.content } : {}),
+          },
+        };
+      }
+      return {
+        kind: item.kind, // "llm" | "tool" | "http" | "local"
+        name: item.name,
+        status: item.status,
+        detail: item.detail,
+        duration_ms: item.durationMs,
+        conversation_id: item.conversationId,
+      };
+    }),
+  };
+}
+
+// Tool calls, aggregated LLM calls, HTTP (LLM API) attempts and local
+  // function spans are all shown in the Trace panel, not inline in the chat
+  // window — the chat window should only show the final answer.
+  const chatTrace = useMemo(
+    () => (timeline.length > 0 ? buildTraceFromTimeline(timeline) : null),
+    [timeline]
+  );
 
   return (
     <Layout
@@ -225,6 +337,10 @@ export default function App() {
       traceCollapsed={traceCollapsed}
       onToggleTrace={() => setTraceCollapsed((v) => !v)}
       trace={activeView === "ask" ? askTrace : activeView === "chat" ? chatTrace : null}
+      conversationId={conversationId}
+      archivedTraces={activeView === "chat" ? archivedTraces : []}
+      activeTraceOpen={activeTraceOpen}
+      onToggleActiveTrace={() => setActiveTraceOpen((v) => !v)}
       activeView={activeView}
       onViewChange={setActiveView}
       showTrace={activeView === "chat" || activeView === "ask"}
@@ -237,6 +353,8 @@ export default function App() {
           onStop={handleStopChat}
           pendingInterrupt={pendingInterrupt}
           onInterruptConfirm={handleInterruptConfirm}
+          conversationId={conversationId}
+          onNewConversation={handleNewConversation}
         />
       ) : activeView === "ask" ? (
         <AskWindow messages={askMessages} loading={askLoading} onSend={handleAskSend} />

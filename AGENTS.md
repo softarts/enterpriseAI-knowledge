@@ -40,19 +40,29 @@ The supported Python runtime is Python 3.14.
 - **"No tools bound" does not guarantee tool-call-free output.** Some
   tool-trained models (observed with an NVIDIA-hosted model in this project)
   keep emitting their native tool-call syntax as plain response *text* —
-  e.g. a raw `<tool_call><function=web_search>...` block — even with no
-  `tools` schema attached to the request, especially once the conversation
-  history is full of prior tool_calls/ToolMessage turns. Any node meant to
-  force a tool-free answer must validate the output for leaked tool-call
-  markup and retry/fall back rather than trust the absence of a bound schema
-  (see `_LEAKED_TOOL_CALL_PATTERN` in `graph.py`).
+  e.g. a raw `<tool_call><function=web_search>...` block requesting yet
+  another search — even with no `tools` schema attached to the request,
+  especially once the conversation history is full of prior
+  tool_calls/ToolMessage turns. **A stronger "don't do that" prompt retry is
+  not a reliable fix**: in one production incident the model emitted the
+  exact same `<tool_call><function=web_search>...` block on 3 plain-text
+  attempts in a row, because it genuinely still wanted another search, not
+  because of a one-off formatting slip. The actual fix that held up: give it
+  exactly one legitimate "tool" to call instead — `graph.py`'s
+  `create_force_finalize_node`/`create_async_force_finalize_node` use
+  `llm.with_structured_output(_FinalAnswer)` (a one-field `{answer: str}`
+  schema) rather than a plain completion, which channels the tool-trained
+  instinct into a structured, parseable result instead of fighting it with
+  wording. `_LEAKED_TOOL_CALL_PATTERN` is kept only as a defensive backstop
+  on the structured field, with a bounded retry (`MAX_FINALIZE_ATTEMPTS`) for
+  the rare case it still fires or the structured call itself errors.
 - **Never stream a response before it's validated.** A streaming node that
   writes tokens via `get_stream_writer()` as they arrive cannot take them back
   — by the time validation would run, a leaked tool-call block is already on
   the user's screen. `create_async_force_finalize_node` buffers the full
-  response, validates it, retries once if needed, and only then writes it to
-  the stream in one shot — a deliberate (and in this one spot, acceptable)
-  trade of true token-by-token streaming for correctness.
+  structured response, validates it, retries if needed, and only then writes
+  it to the stream in one shot — a deliberate (and in this one spot,
+  acceptable) trade of true token-by-token streaming for correctness.
 - Tunable agent/runtime parameters (step limits, per-tool call budgets, feature
   toggles) belong in `langchain_agent/app/config.py`, the existing single
   definition point for this kind of setting — don't add new ad hoc
