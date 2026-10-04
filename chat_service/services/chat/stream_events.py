@@ -7,27 +7,36 @@ Wire format: one JSON object per SSE ``data:`` line, terminated by a blank line.
 Event types
 -----------
 token        {"type":"token","text":str,"turn":int}
-tool_call    {"type":"tool_call","id":str,"name":str,"args":object}
-tool_result  {"type":"tool_result","id":str,"name":str,"status":"ok"|"error","content":str}
 node_start   {"type":"node_start","node":str}
 trace        {"type":"trace","seq":int,"kind":"llm"|"tool"|"http"|"local","name":str,
               "status":"pending"|"running"|"ok"|"error","detail":object,
-              "duration_ms":float|null,"llm_call_id":str,"tool_call_id":str}
+              "duration_ms":float|null,"conversation_id":str,
+              "llm_call_id":str,"tool_call_id":str}
 interrupt    {"type":"interrupt","thread_id":str,"question":str,"resume_key":str,"tools":[...]}
 done         {"type":"done","usage":{"input_tokens":int,"output_tokens":int}|null,
               "finish_reason":"stop"|"interrupt"}
 error        {"type":"error","message":str,"code":str}
 
-A trace event's ``seq`` is its stable index within the turn. LLM calls and
-tool calls are first emitted while still in flight (``status`` ``pending`` /
-``running``) and then re-emitted with the same ``seq`` once finalized with
-their aggregated result and duration — consumers should replace the row they
-already hold for a ``seq``, not append it.
+There is deliberately **no** ``tool_call`` / ``tool_result`` event. Both were
+removed as pure duplicates of ``trace`` rows:
+
+- the model *deciding* to call a tool is ``llm_call`` → ``detail.response.tool_calls``
+  (same id, name and args, read off the aggregated message);
+- the tool *executing* is the ``tool`` trace row (arguments, result, status,
+  duration, keyed by ``tool_call_id``).
+
+Emitting both made a single search render as two rows and read as "it ran
+twice". A trace event's ``seq`` is its stable index within the turn. LLM calls
+and tool calls are first emitted while still in flight (``status``
+``pending`` / ``running``) and then re-emitted with the same ``seq`` once
+finalized with their aggregated result and duration — consumers should replace
+the row they already hold for a ``seq``, not append it.
 
 Sources
 -------
 ``map_custom``   consumes ``stream_mode="custom"`` payloads written by the
-                 agent node (tokens and tool calls).
+                 agent node (tokens, and tool-call notifications that are
+                 tracked for token scoping but not emitted).
 ``map_messages`` consumes ``stream_mode="messages"`` state updates, which
                  carry ToolMessages (tool results), node names and the
                  ``__interrupt__`` payload.
@@ -144,6 +153,12 @@ class StreamEventMapper:
                 return []
             return [StreamEvent("token", {"text": text, "turn": self._turn})]
         if kind == CUSTOM_TOOL_CALL:
+            # Tracked for token-scoping decisions, but NOT emitted as a
+            # `tool_call` event: the `llm_call` trace row already reports this
+            # exact decision in `response.tool_calls` (same id, name and args,
+            # read straight off the aggregated message). Emitting both showed
+            # the user the same call twice — once as a tool_call event and once
+            # as the tool's own `tool` trace row.
             call = {
                 "id": str(payload.get("id") or ""),
                 "name": str(payload.get("name") or ""),
@@ -151,12 +166,7 @@ class StreamEventMapper:
             }
             if call["id"]:
                 self._tool_calls[call["id"]] = call
-            return [
-                StreamEvent(
-                    "tool_call",
-                    {"id": call["id"], "name": call["name"], "args": call["args"]},
-                )
-            ]
+            return []
         return []
 
     # -- messages channel ----------------------------------------------

@@ -65,25 +65,12 @@ export default function App() {
       case "node_start":
         break; // reserved for step indicators
       case "tool_call":
-        setTimeline((prev) => [
-          ...prev,
-          {
-            kind: "tool",
-            id: event.id,
-            name: event.name,
-            args: event.args,
-            status: "running",
-          },
-        ]);
-        break;
       case "tool_result":
-        setTimeline((prev) =>
-          prev.map((item) =>
-            item.kind === "tool" && item.id === event.id
-              ? { ...item, status: event.status, content: event.content }
-              : item
-          )
-        );
+        // No longer sent. Both duplicated a `trace` row that already carried
+        // the same information: the model's decision to call a tool is on the
+        // `llm_call` row (response.tool_calls), and the execution is on the
+        // `tool` row (arguments/result/status/duration, keyed by
+        // tool_call_id). Rendering them again made one search look like two.
         break;
       case "trace":
         // Aggregated LLM calls (kind "llm", carrying the real request and the
@@ -286,39 +273,20 @@ const MAX_ARCHIVED_TRACES = 5;
 
 // Convert the event timeline into the `{steps}` shape TracePanel renders.
 // Shared by the live trace and the archived snapshots so both render
-// identically.
+// identically. Every row is a `trace` event — `tool_call`/`tool_result` are
+// no longer emitted, so no synthetic rows are needed here.
 function buildTraceFromTimeline(timeline) {
   return {
     conversationId:
       timeline.find((item) => item.conversationId)?.conversationId || null,
-    steps: timeline.map((item) => {
-      if (item.kind === "tool" && item.toolCallId && !item.detail) {
-        // Legacy tool_call/tool_result pair from the graph, not a call_trace
-        // "tool" entry.
-        return {
-          kind: "tool",
-          name: item.name,
-          status:
-            item.status === "running"
-              ? "running"
-              : item.status === "error"
-                ? "error"
-                : "ok",
-          detail: {
-            args: item.args,
-            ...(item.content ? { result: item.content } : {}),
-          },
-        };
-      }
-      return {
-        kind: item.kind, // "llm" | "tool" | "http" | "local"
-        name: item.name,
-        status: item.status,
-        detail: item.detail,
-        duration_ms: item.durationMs,
-        conversation_id: item.conversationId,
-      };
-    }),
+    steps: timeline.map((item) => ({
+      kind: item.kind, // "llm" | "tool" | "http" | "local"
+      name: item.name,
+      status: item.status,
+      detail: item.detail,
+      duration_ms: item.durationMs,
+      conversation_id: item.conversationId,
+    })),
   };
 }
 

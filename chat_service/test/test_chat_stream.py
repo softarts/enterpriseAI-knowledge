@@ -4,7 +4,8 @@ Covers the mapper (custom + messages channels) and the streaming service
 without a live LLM:
 
     1. custom token payloads become token events
-    2. custom tool-call payloads become tool_call events
+    2. custom tool-call payloads are tracked but NOT emitted (they duplicate
+       the llm_call trace row)
     3. tool results and usage are derived from the final state
     4. interrupt payloads are synthesized from __interrupt__
     5. token_scope="final" buffers the first round unless a tool call follows
@@ -56,6 +57,11 @@ class ScriptedLLM(BaseChatModel):
     (Handing the graph raw ``AIMessageChunk`` objects only worked while
     ``bind_tools`` returned a bespoke wrapper; with a real RunnableBinding the
     core machinery does that wrapping itself.)
+
+    When ``chunks`` contains a tool call it is only replayed on the *first*
+    round. Replaying it every round would make the agent loop forever (the
+    model would keep seeing "no tool result yet" as false), which is how a
+    naive mock turns one tool call into N identical ones.
     """
 
     chunks: List[Any] = Field(default_factory=list)
@@ -67,15 +73,25 @@ class ScriptedLLM(BaseChatModel):
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="ok"))])
 
+    def _pick_chunks(self, messages: List[Any]) -> List[Any]:
+        has_tool_result = any(
+            getattr(m, "type", "") == "tool" for m in messages
+        )
+        if not has_tool_result:
+            return self.chunks
+        # Post-tool round: drop any leading tool-call fragment so the model
+        # answers in prose, exactly as a real model would.
+        return [c for c in self.chunks if isinstance(c, str)]
+
     def _stream(self, messages, stop=None, run_manager=None, **kwargs):
-        for item in self.chunks:
+        for item in self._pick_chunks(messages):
             if isinstance(item, str):
                 yield ChatGenerationChunk(message=AIMessageChunk(content=item))
             else:
                 yield item
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
-        for item in self.chunks:
+        for item in self._pick_chunks(messages):
             if isinstance(item, str):
                 yield ChatGenerationChunk(message=AIMessageChunk(content=item))
             else:
@@ -136,15 +152,21 @@ class StreamEventMapperTest(unittest.TestCase):
         mapper = StreamEventMapper(thread_id="t1")
         self.assertEqual(mapper.map_custom({"kind": "token", "text": ""}), [])
 
-    def test_custom_tool_call_becomes_tool_call_event(self) -> None:
+    def test_custom_tool_call_is_not_emitted_as_an_event(self) -> None:
+        """The custom-channel tool call must NOT become a `tool_call` event.
+
+        It is still tracked (token scoping depends on knowing a tool was
+        called), but the information is already carried by the `llm_call`
+        trace row's ``response.tool_calls`` and by the tool's own `tool` row.
+        Emitting it as an event too showed one search as two rows.
+        """
         mapper = StreamEventMapper(thread_id="t1")
         events = mapper.map_custom(
             {"kind": "tool_call", "id": "c1", "name": "web_search", "args": {"query": "q"}}
         )
-        self.assertEqual([e.type for e in events], ["tool_call"])
-        self.assertEqual(events[0].data["id"], "c1")
-        self.assertEqual(events[0].data["name"], "web_search")
-        self.assertEqual(events[0].data["args"], {"query": "q"})
+        self.assertEqual(events, [])
+        # Tracked internally for token scoping.
+        self.assertIn("c1", mapper._tool_calls)
 
     def test_interrupt_synthesized(self) -> None:
         mapper = StreamEventMapper(thread_id="conv-1")
@@ -307,15 +329,38 @@ class ChatStreamServiceTest(unittest.TestCase):
             events = asyncio.run(collect())
 
         types = [e.type for e in events]
-        self.assertIn("tool_call", types)
-        self.assertIn("tool_result", types)
+        # The redundant tool_call/tool_result events are gone; both facts live
+        # in trace rows now (see the two assertions below).
+        self.assertNotIn("tool_call", types)
+        self.assertNotIn("tool_result", types)
         self.assertEqual(types[-1], "done")
-        call = next(e for e in events if e.type == "tool_call")
-        self.assertEqual(call.data["name"], "get_current_time")
-        result = next(e for e in events if e.type == "tool_result")
-        self.assertEqual(result.data["id"], "c1")
-        self.assertEqual(result.data["name"], "get_current_time")
-        self.assertIn("2026", result.data["content"])
+
+        # (a) the model's decision -> the llm row's aggregated tool_calls
+        deciding = [
+            e
+            for e in events
+            if e.type == "trace"
+            and e.data["kind"] == "llm"
+            and (e.data["detail"].get("response") or {}).get("tool_calls")
+        ]
+        self.assertTrue(deciding, "llm row must record the requested tool call")
+        call = deciding[0].data["detail"]["response"]["tool_calls"][0]
+        self.assertEqual(call["name"], "get_current_time")
+        self.assertEqual(call["id"], "c1")
+
+        # (b) the execution -> exactly one tool row, keyed by tool_call_id.
+        # Rows are emitted twice (running -> ok) under the same `seq`, and the
+        # frontend collapses them, so dedupe the way the client does.
+        tool_rows = {}
+        for e in events:
+            if e.type == "trace" and e.data["kind"] == "tool":
+                tool_rows[e.data["seq"]] = e.data
+        self.assertEqual(len(tool_rows), 1, "one executed tool call = one tool row")
+        final_tool = next(iter(tool_rows.values()))
+        self.assertEqual(final_tool["tool_call_id"], "c1")
+        self.assertEqual(final_tool["name"], "get_current_time")
+        self.assertEqual(final_tool["status"], "ok")
+        self.assertIn("2026", final_tool["detail"]["result"])
 
     def test_tool_row_carries_arguments_and_result(self) -> None:
         """The `tool` row must expose what was asked and what came back.

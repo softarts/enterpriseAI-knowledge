@@ -340,8 +340,6 @@ async function consumeSSE(response, onEvent) {
 - `App.jsx:129` 中的 `handleSend()` 调用 `askQuestionStream(question, { onEvent: handleStreamEvent })`
 - 回调函数是 `App.jsx:45-108` 的 `handleStreamEvent(event)`，它根据 `event.type` 分发处理：
   - `"token"` → 追加到当前消息气泡文本（`appendToStreaming`）
-  - `"tool_call"` → 添加到 timeline，状态为 `running`
-  - `"tool_result"` → 更新 timeline 中对应工具调用的结果和状态
   - `"trace"` → 添加 trace 条目（llm/tool/http/local）到 timeline，按 `seq` 覆盖
   - `"interrupt"` → 弹出 HITL 确认对话框
   - `"done"` → 清除加载状态
@@ -355,21 +353,25 @@ async function consumeSSE(response, onEvent) {
 
 ```jsonc
 {"type":"token","text":"你好","turn":1}
-{"type":"tool_call","id":"call_1","name":"web_search","args":{"query":"news"}}
-{"type":"tool_result","id":"call_1","name":"web_search","status":"ok","content":"..."}
 {"type":"node_start","node":"agent"}
-{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"pending","detail":{"request":{"messages":[...],"tools_bound":[...],"node":"agent"}},"duration_ms":null,"llm_call_id":"01a1..."}
+{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"pending","detail":{"request":{"messages":[...],"tools_bound":[...],"node":"agent"}},"duration_ms":null,"conversation_id":"conversation-...","llm_call_id":"01a1..."}
 {"type":"trace","seq":1,"kind":"http","name":"llm_request","status":"pending","detail":{"method":"POST","url":"https://.../chat/completions","attempt":1,"headers":{...},"body":"{...}"},"duration_ms":null,"llm_call_id":"01a1..."}
 {"type":"trace","seq":1,"kind":"http","name":"llm_response","status":"ok","detail":{"method":"POST","url":"https://.../chat/completions","attempt":1,"status_code":200},"duration_ms":378.1,"llm_call_id":"01a1..."}
 {"type":"trace","seq":2,"kind":"tool","name":"web_search","status":"running","detail":{"arguments":{"query":"news"}},"duration_ms":null,"tool_call_id":"call_1"}
 // 同 seq 的 llm/tool 行会再发一次，status 从 pending/running 变成 ok/error，
 // detail 里补上聚合响应/工具结果和耗时；客户端应按 seq 覆盖同一行。
-{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"ok","detail":{"request":{...},"response":{"role":"assistant","content":"...","usage":{...}}},"duration_ms":812.4,"llm_call_id":"01a1..."}
+{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"ok","detail":{"request":{...},"response":{"role":"assistant","content":"...","tool_calls":[{"name":"web_search","args":{...}}],"usage":{...}}},"duration_ms":812.4,"llm_call_id":"01a1..."}
 {"type":"trace","seq":2,"kind":"tool","name":"web_search","status":"ok","detail":{"arguments":{"query":"news"},"result":"Web search results..."},"duration_ms":1204.7,"tool_call_id":"call_1"}
 {"type":"interrupt","thread_id":"conv-1","question":"即将调用外部工具 web_search，是否继续？","resume_key":"conv-1:call_1","tools":[...]}
 {"type":"done","usage":{"input_tokens":812,"output_tokens":96},"finish_reason":"stop"}
 {"type":"error","message":"...","code":"upstream"}
 ```
+
+> **没有 `tool_call` / `tool_result` 事件了。** 两者都已删除，因为它们和
+> `trace` 行是同一份信息：模型"决定"调用工具 =
+> `llm_call` → `detail.response.tool_calls`（id/name/args 完全一致，直接读自
+> 聚合后的消息）；工具"真的执行" = `tool` 行（arguments/result/status/duration，
+> 按 `tool_call_id` 关联）。两者都发会让一次搜索显示成两行，读起来像"执行了两次"。
 
 `finish_reason` 为 `interrupt` 表示本轮因 HITL 暂停（此时 `usage` 为 null）；
 流在 `done` 事件后结束，前端可无条件清除 loading 状态。
@@ -424,11 +426,12 @@ LangGraph 的 token 有两条限制，因此需要同时消费三个通道：
 |---|---|---|
 | `custom` | token、tool_call | 节点内 LLM 的 chunk **不会**冒泡为 `on_chat_model_stream`，只能由 agent 节点用 `get_stream_writer()` 主动写出 |
 | `messages` | node_start | `(message, metadata)` 元组，`metadata["langgraph_node"]` 是节点名 |
-| `updates` | interrupt、tool_result | 节点级 state delta；暂停运行时顶层出现 `__interrupt__` 键 |
+| `updates` | interrupt | 节点级 state delta；暂停运行时顶层出现 `__interrupt__` 键 |
 
-`tool_result` 与 `usage` 不在流式载荷里：前者从 `updates` 通道当轮收集的
-`ToolMessage` 生成（不读 checkpoint，避免重发历史轮次的工具结果），后者取自
-`updates` 通道最终 AIMessage 的 `usage_metadata`。
+工具的**执行**（arguments/result/status/duration）不走流式载荷，而是由
+`call_trace` 的 `on_tool_start`/`on_tool_end` 回调记录成 `kind:"tool"` 的 trace
+行——这是唯一能看到 `web_search` 的层（它走 `requests`/`aiohttp`，httpx 钩子对
+它不触发）。`usage` 取自 `updates` 通道最终 AIMessage 的 `usage_metadata`。
 
 `token_scope`：`all`（默认）立即转发每轮 token；`final` 先缓冲，只有在没发生工具
 调用时才在结束时输出，避免把"决定调工具"那轮的中间文本暴露给用户。
@@ -540,8 +543,8 @@ ContextVar → httpx `request` hook 读到后盖到 request 的 extensions →
   `drain.drain()` 一次，再发这个 chunk 自己的事件，循环结束后再抽干一次收尾。
   这保证了真实的时间顺序：一轮 `agent` 节点里，HTTP 请求/响应发生在
   `llm_with_tools.astream()` 真正开始流式返回内容之前，所以 `llm_request`/
-  `llm_response` 两条会先于该轮的 `tool_call` 事件出现——而不是像最初实现那样，
-  所有 trace 条目都在最后一次性堆在 `tool_call`/`tool_result` 后面，顺序和
+  `llm_response` 两条会先于该轮 `llm_call` 的 finalize 出现——而不是像最初实现那样，
+  所有 trace 条目都在最后一次性堆在节点事件后面，顺序和
   实际发生顺序对不上。
 
 `llm`/`tool` 条目是**先 provisional 后 finalize**的：`on_chat_model_start` 时先
@@ -558,28 +561,27 @@ ContextVar → httpx `request` hook 读到后盖到 request 的 extensions →
 ```
  1. llm      llm_call   (pending)  ← 模型这次调用开始了
  2. node_start agent
- 3. tool_call web_search            ← 模型"决定"搜索（custom 通道）
- 4. llm      llm_call   (ok)        ← 同一次调用 finalize，response.tool_calls 里有 web_search
- 5. local    hitl_gate              ← HITL 闸门（web_search 默认自动放行，不 interrupt）
- 6. local    search_budget_check    ← 预算检查：还没超，继续走 tools
- 7. node_start tools
- 8. tool     web_search (ok)        ← 工具"真的执行"了
- 9. node_start agent
-10. llm      llm_call   (pending)  ← 带着 ToolMessage 再问模型一次
-11. token    ...
-12. llm      llm_call   (ok)
-13. node_start update_memory
-14. tool_result web_search
-15. done
+ 3. llm      llm_call   (ok)        ← 同一次调用 finalize，response.tool_calls 里有 web_search ←「决定搜索」
+ 4. local    hitl_gate              ← HITL 闸门（web_search 默认自动放行，不 interrupt）
+ 5. local    search_budget_check    ← 预算检查：还没超，继续走 tools
+ 6. node_start tools
+ 7. tool     web_search (ok)        ← 工具"真的执行"了 ←「执行搜索」
+ 8. node_start agent
+ 9. llm      llm_call   (pending)   ← 带着 ToolMessage 再问模型一次
+10. token    ...
+11. llm      llm_call   (ok)
+12. node_start update_memory
+13. done
 ```
 
 关键点，也是最容易被误读的地方：
 
-- **第 3 行和第 8 行不是同一个东西。** 第 3 行是模型在 `custom` 通道上"请求"
-  调用 web_search；第 8 行是 `on_tool_end` 记下的"执行完成"。**一次调用一条
-  `tool` 行**，所以看起来像"出现了两次 web_search"，其实是"决定"和"执行"各一次。
-  界面上已加提示：展开 `llm_call` 会看到
-  `↳ This call requested a tool`，并说明下面的 `tool` 行是执行而非第二次调用。
+- **一次搜索只有一条 `tool` 行。** 「决定调用」（第 3 行，模型返回的
+  `tool_calls`）和「执行」（第 7 行，`on_tool_end`）是两个不同事实，分别记在
+  `llm_call` 行和 `tool` 行上。以前还会额外发 `tool_call`/`tool_result` 事件，
+  两者和 trace 行信息完全重复，于是界面上出现两条 web_search——看起来像搜索了
+  两次。**已删除**。界面上展开 `llm_call` 会看到
+  `↳ This call requested a tool`，说明下面的 `tool` 行是执行而非第二次调用。
 - **`llm_request` 里确实有 tools schema。** 实测 `_get_request_payload` 产出的
   顶层键是 `['messages','model','stream','tools']`，`tools` 里是完整的 function
   定义。之前"看不到"是因为 UI 没渲染——现在 `llm_request` 行有
@@ -624,9 +626,9 @@ Starlette 的 task group 会在**另一个 task** 里 finalize 它，于是 `tra
 > `asyncio.run` 时，loop 关停会就地 cancel 掉挂起的生成器，不会跨 Context，
 > 于是**带着 bug 也能通过**。
 
-前端：`App.jsx` 的 `timeline` 状态把 `tool_call`/`tool_result`/`trace`
-三类事件按到达顺序合并成一条时间线，交给 `TracePanel`；`trace` 事件按 `seq`
-覆盖（provisional → finalized）。`StepRow` 的 `KindPill` 现在渲染
+前端：`App.jsx` 的 `timeline` 状态把 `trace` 事件按到达顺序合并成一条时间线，
+交给 `TracePanel`；`trace` 事件按 `seq` 覆盖（provisional → finalized）。
+`StepRow` 的 `KindPill` 现在渲染
 `LLM`/`TOOL`/`HTTP`/`LOCAL` 四种小胶囊（此前 `kind:"tool"` 被显式隐藏，且
 CSS 里根本没有 `--tool`/`--llm` 配色）；`kind:"llm"` 用专门的
 `LlmCallStepDetail` 渲染 node/tools_bound/request/聚合响应/tool_calls，
@@ -691,9 +693,9 @@ Checkpointer 恢复。
 `cancelStream`）与 `src/App.jsx` 的 `handleStreamEvent`：token 追加渲染到聊天
 气泡，interrupt 弹确认框，done 结束 loading。
 
-`tool_call`/`tool_result` **不**渲染在聊天窗口里——聊天窗口只显示最终回答
-（以及 error 消息和 HITL 确认框）。这两类事件被收进 `timeline` 状态，
-`App.jsx` 据此拼出一个 `{steps:[...]}` 形状的 trace 对象传给右侧
+工具调用（`llm_call` 的 `tool_calls` 和 `tool` 行）**不**渲染在聊天窗口里
+——聊天窗口只显示最终回答（以及 error 消息和 HITL 确认框）。这些行被收进
+`timeline` 状态，`App.jsx` 据此拼出一个 `{steps:[...]}` 形状的 trace 对象传给右侧
 `TracePanel`（和非流式 `/api/chat` 的 `trace` 复用同一个组件/同一套
 `trace-step` 展现逻辑），每个工具调用显示为一个可展开的 step，状态为
 `running`/`ok`/`error`。

@@ -174,28 +174,24 @@ def _final_state_events(
     mapper: StreamEventMapper,
     tool_messages: List[ToolMessage],
 ) -> List[StreamEvent]:
-    """Derive tool_result and usage events for this run.
+    """Derive the usage event for this run.
 
-    ``tool_messages`` holds the ToolMessages produced by *this* run (collected
-    from the updates channel); ``state`` supplies the final AIMessage, which
-    carries the aggregated ``usage_metadata``.
+    Tool *execution* is deliberately NOT emitted here: the ``tool`` trace row
+    (from ``call_trace``'s ``on_tool_start``/``on_tool_end``) already carries
+    the same tool call's arguments, result, status and duration, correlated by
+    ``tool_call_id``. A separate ``tool_result`` event was a pure duplicate —
+    same id, same content — and rendered as a second row in the UI, which read
+    as "the tool ran twice".
+
+    ``tool_messages`` is still consumed to keep ``mapper``'s bookkeeping
+    (and the usage lookup below) driven by the run's own messages only, not by
+    ToolMessages left in the checkpoint by earlier turns.
     """
     events: List[StreamEvent] = []
     for message in tool_messages:
         content = message.content if isinstance(message.content, str) else str(message.content)
         mapper.note_tool_result(
             message.tool_call_id or "", message.name or "", content, "ok"
-        )
-        events.append(
-            StreamEvent(
-                "tool_result",
-                {
-                    "id": message.tool_call_id or "",
-                    "name": message.name or "",
-                    "status": "error" if message.status == "error" else "ok",
-                    "content": content,
-                },
-            )
         )
 
     for message in reversed(state.get("messages", []) or []):
