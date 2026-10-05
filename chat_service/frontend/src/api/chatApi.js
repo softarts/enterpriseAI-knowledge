@@ -104,15 +104,19 @@ async function consumeSSE(response, onEvent) {
  * token / tool_call / tool_result / node_start / interrupt / done / error.
  * Resolves when the server closes the stream.
  */
-export async function askQuestionStream(question, { onEvent, signal, tokenScope = "all" } = {}) {
+export async function askQuestionStream(question, { onEvent, signal, tokenScope = "all", traceId } = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    "X-Conversation-Id": getConversationId(),
+  };
+  if (traceId) {
+    headers["X-Trace-Id"] = traceId;
+  }
   const res = await fetch(STREAM_ENDPOINT, {
     method: "POST",
     signal,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Conversation-Id": getConversationId(),
-    },
-    body: JSON.stringify({ question, token_scope: tokenScope }),
+    headers,
+    body: JSON.stringify({ question, token_scope: tokenScope, trace_id: traceId }),
   });
 
   if (!res.ok || !res.body) {
@@ -122,15 +126,19 @@ export async function askQuestionStream(question, { onEvent, signal, tokenScope 
 }
 
 /** Resume a turn paused by the HITL gate. `resume` false rejects the tool call. */
-export async function resumeStream(resume, { onEvent, signal, tokenScope = "all" } = {}) {
+export async function resumeStream(resume, { onEvent, signal, tokenScope = "all", traceId } = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    "X-Conversation-Id": getConversationId(),
+  };
+  if (traceId) {
+    headers["X-Trace-Id"] = traceId;
+  }
   const res = await fetch(RESUME_ENDPOINT, {
     method: "POST",
     signal,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Conversation-Id": getConversationId(),
-    },
-    body: JSON.stringify({ resume, token_scope: tokenScope }),
+    headers,
+    body: JSON.stringify({ resume, token_scope: tokenScope, trace_id: traceId }),
   });
   if (!res.ok || !res.body) {
     throw new Error(`Resume request failed: ${res.status} ${res.statusText}`);

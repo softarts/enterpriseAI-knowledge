@@ -719,6 +719,42 @@ body {
   margin-bottom: 4px;
 }
 
+.message__trace-id {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.message__trace-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+
+.message__trace-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--accent, #6c8cff);
+  transition: all 0.15s ease;
+}
+
+.message__trace-code:hover {
+  background: rgba(108, 140, 255, 0.15);
+  border-color: var(--accent, #6c8cff);
+  text-decoration: underline;
+}
+
 /* typing indicator */
 .chatwindow__typing {
   display: inline-flex;
@@ -1129,6 +1165,15 @@ body {
 .trace-archived__head:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+.tracepanel__rounds {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.trace-round-archived {
+  margin-top: 0;
 }
 .trace-archived {
   margin-top: 10px;

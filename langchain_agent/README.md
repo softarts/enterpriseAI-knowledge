@@ -637,26 +637,35 @@ async def agent(state: MemoryGraphState, config: RunnableConfig) -> Dict[str, An
 ### 2. Call Trace 的初始化与回调/HTTP 钩子
 
 Call Trace 用 `contextvars.ContextVar` 为每个请求独立管理一份 entry list，
-收集**每次 LLM 调用（聚合后的 request/response）**、**每次工具执行**、
-HTTP 请求/响应尝试，以及本地函数 span。
+收集**每次 LLM 调用（逻辑层的 request/response）**、**每次工具执行**、
+**底层 HTTP 请求/响应（物理传输层）**，以及本地函数决策 span。
 
-四种 `kind`：
+四种 `kind` 架构：
 
-| kind | 来源 | 说明 |
-|---|---|---|
-| `llm` | `LlmTraceHandler` 的 `on_chat_model_start` / `on_llm_end` | 一次 LLM 调用一条，含聚合响应 |
-| `tool` | `LlmTraceHandler` 的 `on_tool_start` / `on_tool_end` | 一次工具执行一条（`web_search` 只能靠这层看到） |
-| `http` | httpx `event_hooks` | 传输层细节：尝试次数、状态码、出站 body |
-| `local` | 图节点里的 `record_local(...)` | 节点决策类 span（`hitl_gate`/`search_budget_check`/`force_finalize`） |
+| kind | name | 来源 | 说明与定位 |
+|---|---|---|---|
+| `llm` | `llm_call` | `LlmTraceHandler` 的 `on_chat_model_start` / `on_llm_end` | **逻辑层**：一次模型调用一条。记录发送给模型的消息列表、绑定工具、所属图节点；流式结束后原地 finalize 写入**已聚合的完整 AIMessage**、tool_calls 与 token usage。 |
+| `tool` | 工具名（如 `web_search`） | `LlmTraceHandler` 的 `on_tool_start` / `on_tool_end` | **工具执行层**：一次工具执行一条。记录输入参数（Arguments）与工具结果（Result），UI 默认展开输入参数、折叠结果。 |
+| `http` | `http_request` / `http_response` | httpx `event_hooks` | **传输层**：真实的 wire-level HTTP 尝试。`http_request` 记录发往 API 的真实 JSON body（含 `stream_options` 及 OpenAI tool schema）；`http_response` 记录状态码与网络耗时。与父级 `llm_call` 通过 `llm_call_id` 关联。 |
+| `local` | 节点名（如 `hitl_gate`） | 图节点里的 `record_local(...)` | **控制流层**：决策类 span（`hitl_gate`/`search_budget_check`/`force_finalize`）。 |
 
-回调由 `build_trace_callbacks()` 挂到图运行的 `config["callbacks"]`
-（`runtime.py` 的 `invoke` 与 `chat_stream.py` 的 `astream` 各挂一次）。
+#### `llm_call` 与 `http_request` / `http_response` 的分层关系
+
+二者不是重复，而是父子两层抽象：
+- **`llm_call`（kind="llm"）** 回答业务与模型逻辑问题：“LangGraph 给模型传了哪些消息？模型最终输出了什么文本或工具调用请求？”
+- **`http_request` / `http_response`（kind="http"）** 回答网络与线缆级问题：“在网络 wire 上实际发出了怎样的 JSON？是否有重试（attempt 序号）？HTTP 状态码是什么？”
+- 每次 `llm_call` 在 `on_chat_model_start` 时发布一个 `run_id` 到 `_CURRENT_LLM_CALL` ContextVar，httpx 钩子将该 ID 盖在 `request.extensions["call_trace_llm_call_id"]`，使传输层记录天然归属于其父级 LLM 调用。
+
+#### 多轮对话追踪与 Trace ID
+- 每一轮对话（turn/round）在开始时生成独立的 `trace_id`（如 `tr-e6bdd33e`）。
+- 对话窗口中，Assistant 消息下方以更小字号展示对应的 `trace_id`。
+- 新的一轮对话开始时，**当前轮次的 Trace 不会丢失，而是自动折叠（collapse）** 保留在 TracePanel 中，用户可随时展开查看历史轮次；当前轮次作为展开的 Current turn 呈现。
 
 #### 初始化入口
 
 **① 非流式 `/api/chat` 的初始化**（`chat_service/services/chat/chat_service.py:87`）：
 ```python
-with call_trace.trace_scope() as call_entries:
+with call_trace.trace_scope(conversation_id=thread_id, trace_id=trace._trace_id) as call_entries:
     answer = self._memory_runtime.generate_answer_with_memory(
         llm=llm_client.get_llm(),
         ...
@@ -674,7 +683,7 @@ for entry in call_entries:
 
 **② 流式 `/api/chat/stream` 的初始化**（`chat_stream.py`）：
 ```python
-with call_trace.trace_scope() as call_entries:
+with call_trace.trace_scope(conversation_id=thread_id, trace_id=active_trace_id) as call_entries:
     # 必须在 trace_scope() 内部构造：scope 会把 sink 重新绑定到新 list
     drain = _TraceDrain(call_entries)
     async for mode, chunk in graph.astream(inputs, config, stream_mode=[...]):
@@ -711,24 +720,7 @@ return ChatOpenAI(**kwargs)
 
 #### 钩子的具体实现
 
-**钩子工厂**（`langchain_agent/app/call_trace.py:165-192`）：
-```python
-def build_traced_http_clients():
-    """Build httpx.Client 和 httpx.AsyncClient，请求/响应事件会写入当前 trace_scope。"""
-    import httpx
-    
-    sync_hooks = {"request": [_on_request], "response": [_on_response]}
-    async_hooks = {"request": [_on_request_async], "response": [_on_response_async]}
-    
-    return (
-        httpx.Client(event_hooks=sync_hooks),
-        httpx.AsyncClient(event_hooks=async_hooks),
-    )
-```
-
-httpx 的 event_hooks 机制在 request 发出前、response 收到后自动调用这些钩子。
-
-**Request 钩子**（`call_trace.py:103-126`）：
+**Request 钩子**（`call_trace.py`）：
 ```python
 def _on_request(request: Any) -> None:
     try:
@@ -738,25 +730,23 @@ def _on_request(request: Any) -> None:
         
         entry = {
             "kind": "http",
-            "name": "llm_request",
+            "name": "http_request",
             "status": "pending",
             "detail": {
                 "method": request.method,
                 "url": str(request.url),
                 "attempt": attempt,
                 "headers": _redact_headers(request.headers),  # 脱敏 Authorization
+                "body": body,  # wire 真实请求体
             },
             "duration_ms": None,
         }
-        _log_entry(entry)  # 同步写日志文件
-        sink = _SINK.get()  # 获取当前请求的 trace list
-        if sink is not None:
-            sink.append(entry)  # 追加到 entry list
+        _append_timed(...)
     except Exception:
         logger.debug("call_trace.on_request.failed", exc_info=True)
 ```
 
-**Response 钩子**（`call_trace.py:128-155`）：
+**Response 钩子**（`call_trace.py`）：
 ```python
 def _on_response(response: Any) -> None:
     try:
@@ -768,7 +758,7 @@ def _on_response(response: Any) -> None:
         # ⚠️ 故意不读 response body：SSE 流式响应会被"偷走"
         entry = {
             "kind": "http",
-            "name": "llm_response",
+            "name": "http_response",
             "status": "ok" if response.status_code < 400 else "error",
             "detail": {
                 "method": request.method,
@@ -778,10 +768,7 @@ def _on_response(response: Any) -> None:
             },
             "duration_ms": duration_ms,
         }
-        _log_entry(entry)
-        sink = _SINK.get()
-        if sink is not None:
-            sink.append(entry)
+        _append_timed(...)
     except Exception:
         logger.debug("call_trace.on_response.failed", exc_info=True)
 ```

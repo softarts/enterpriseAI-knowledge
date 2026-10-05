@@ -84,7 +84,7 @@ class ChatService:
             len(memory_context.conversation_messages),
         )
         try:
-            with call_trace.trace_scope(conversation_id=thread_id) as call_entries:
+            with call_trace.trace_scope(conversation_id=thread_id, trace_id=trace._trace_id) as call_entries:
                 answer = self._memory_runtime.generate_answer_with_memory(
                     llm=llm_client.get_llm(),
                     system_prompt="",

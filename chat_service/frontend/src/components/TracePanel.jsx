@@ -238,7 +238,7 @@ function LlmCallStepDetail({ detail }) {
             <strong>{decidedTools.map((c) => c.name).join(", ")}</strong>. The{" "}
             <code>tool</code> row further down is that tool actually executing —
             one row each, not two. Expand the matching{" "}
-            <code>llm_request</code> row to see the tool schema that was offered
+            <code>http_request</code> row to see the tool schema that was offered
             on the wire.
           </p>
         </div>
@@ -317,6 +317,7 @@ function LlmCallStepDetail({ detail }) {
 // for; the result is what the tool returned (for web_search that is the
 // Tavily search output). Both are shown in full and collapse when long.
 function ToolStepDetail({ detail }) {
+  const [resultOpen, setResultOpen] = useState(false);
   const args = detail?.arguments;
   const result = detail?.result;
   const hasArgs = args && Object.keys(args).length > 0;
@@ -326,7 +327,7 @@ function ToolStepDetail({ detail }) {
       {hasArgs && (
         <div className="trace-section">
           <div className="trace-section__title">
-            Arguments
+            Arguments (Input)
             <span className="trace-section__hint">requested by the model</span>
           </div>
           <RawOutput text={formatJson(args)} collapsible={false} />
@@ -334,22 +335,35 @@ function ToolStepDetail({ detail }) {
       )}
       {result != null && (
         <div className="trace-section">
-          <div className="trace-section__title">
-            Result
-            <span className="trace-section__hint">
-              as seen by the model
-              {result.length ? ` · ${result.length.toLocaleString()} chars` : ""}
+          <button
+            type="button"
+            className="trace-section__collapsible"
+            onClick={() => setResultOpen((v) => !v)}
+            aria-expanded={resultOpen}
+            style={{ width: "100%", background: "none", border: "none", cursor: "pointer", padding: 0, textAlign: "left" }}
+          >
+            <span className="trace-section__title">
+              Result
+              <span className="trace-section__hint">
+                {resultOpen ? "click to hide" : "click to show"}
+                {result.length ? ` · ${result.length.toLocaleString()} chars` : ""}
+              </span>
             </span>
-          </div>
-          {/\.\.\.\[truncated\]/.test(result) && (
-            <p className="trace-section__note">
-              This tool shortens its own output before handing it to the model
-              (a context-window budget, in <code>tool_layer.py</code>). The
-              trace shows the already-shortened text — i.e. exactly what the
-              model received.
-            </p>
+            <span className="trace-section__chevron">{resultOpen ? "▾" : "▸"}</span>
+          </button>
+          {resultOpen && (
+            <>
+              {/\.\.\.\[truncated\]/.test(result) && (
+                <p className="trace-section__note">
+                  This tool shortens its own output before handing it to the model
+                  (a context-window budget, in <code>tool_layer.py</code>). The
+                  trace shows the already-shortened text — i.e. exactly what the
+                  model received.
+                </p>
+              )}
+              <RawOutput text={result} />
+            </>
           )}
-          <RawOutput text={result} />
         </div>
       )}
       {detail?.error && (
@@ -461,12 +475,81 @@ function ArchivedTrace({ entry }) {
   );
 }
 
+function RoundTraceItem({ entry }) {
+  const [open, setOpen] = useState(false);
+  const steps = entry.trace?.steps || [];
+  const roundLabel = entry.round != null ? `Round ${entry.round}` : "Round";
+  const questionPreview = entry.question
+    ? ` · "${entry.question.slice(0, 24)}${entry.question.length > 24 ? "…" : ""}"`
+    : "";
+
+  return (
+    <section className="trace-archived trace-round-archived" id={`trace-round-${entry.traceId}`}>
+      <button
+        type="button"
+        className="trace-archived__head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={entry.traceId ? `trace_id: ${entry.traceId}` : undefined}
+      >
+        <span className="trace-archived__chevron">{open ? "▾" : "▸"}</span>
+        <span className="trace-archived__label">
+          <strong>{roundLabel}</strong>
+          {questionPreview}
+        </span>
+        {entry.traceId && (
+          <span className="trace-archived__conv" title={`trace_id: ${entry.traceId}`}>
+            {entry.traceId}
+          </span>
+        )}
+        <span className="trace-archived__count">{steps.length} steps</span>
+      </button>
+      {open && (
+        <div className="trace-archived__body">
+          {entry.trace && (
+            <div className="tracepanel__meta" style={{ padding: "4px 8px", marginBottom: "8px" }}>
+              {entry.traceId && (
+                <div>
+                  <span className="tracepanel__k">trace_id</span>
+                  <span className="tracepanel__v">{entry.traceId}</span>
+                </div>
+              )}
+              {entry.trace.duration_ms != null && (
+                <div>
+                  <span className="tracepanel__k">duration</span>
+                  <span className="tracepanel__v">{entry.trace.duration_ms} ms</span>
+                </div>
+              )}
+              <div>
+                <span className="tracepanel__k">steps</span>
+                <span className="tracepanel__v">{steps.length}</span>
+              </div>
+            </div>
+          )}
+          {entry.question && (
+            <section className="trace-turn" aria-label="Conversation turn question" style={{ marginBottom: "8px" }}>
+              <div className="trace-turn__item">
+                <div className="trace-turn__label">You</div>
+                <pre className="trace-turn__text">{entry.question}</pre>
+              </div>
+            </section>
+          )}
+          {steps.map((s, i) => (
+            <StepRow key={i} step={s} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ─── Trace Panel ─────────────────────────────────────────────────────────────
 export default function TracePanel({
   collapsed,
   onToggle,
   trace,
   conversationId,
+  roundTraces = [],
   archivedTraces = [],
   activeTraceOpen = true,
   onToggleActiveTrace,
@@ -519,10 +602,19 @@ export default function TracePanel({
 
       {!collapsed && (
         <div className="tracepanel__body">
-          {!trace && (
+          {!trace && roundTraces.length === 0 && (
             <p className="tracepanel__empty">
               Run a query to see its execution trace.
             </p>
+          )}
+
+          {/* Previous rounds in the current conversation, collapsed by default */}
+          {roundTraces.length > 0 && (
+            <div className="tracepanel__rounds">
+              {roundTraces.map((entry) => (
+                <RoundTraceItem key={entry.key || entry.traceId} entry={entry} />
+              ))}
+            </div>
           )}
 
           {trace && (
@@ -537,7 +629,7 @@ export default function TracePanel({
                   <span className="trace-archived__chevron">
                     {activeTraceOpen ? "▾" : "▸"}
                   </span>
-                  Current turn
+                  Current turn {trace.round != null ? `(Round ${trace.round})` : ""}
                   <span className="trace-archived__count">
                     {steps.length} steps
                   </span>

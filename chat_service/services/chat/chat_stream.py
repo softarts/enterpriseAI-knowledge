@@ -22,6 +22,7 @@ Both are required: ``custom`` alone has no node/tool/interrupt context, and
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage, ToolMessage
@@ -105,6 +106,11 @@ def _trace_event(entry: Dict[str, Any], seq: int) -> StreamEvent:
             **(
                 {"conversation_id": entry["conversation_id"]}
                 if entry.get("conversation_id")
+                else {}
+            ),
+            **(
+                {"trace_id": entry["trace_id"]}
+                if entry.get("trace_id")
                 else {}
             ),
             **(
@@ -245,6 +251,7 @@ class ChatStreamService:
         config: Dict[str, Any],
         thread_id: str,
         token_scope: str,
+        trace_id: Optional[str] = None,
     ) -> AsyncIterator[StreamEvent]:
         """Drive one graph run, translating the stream into protocol events.
 
@@ -260,9 +267,10 @@ class ChatStreamService:
         # `call_entries` to a fresh list, so a drain constructed before it
         # would hold a stale, permanently-empty reference.
         drain: Optional[_TraceDrain] = None
+        active_trace_id = trace_id or f"tr-{uuid.uuid4().hex[:8]}"
 
         try:
-            with call_trace.trace_scope(conversation_id=thread_id) as call_entries:
+            with call_trace.trace_scope(conversation_id=thread_id, trace_id=active_trace_id) as call_entries:
                 drain = _TraceDrain(call_entries)
                 async for mode, chunk in graph.astream(
                     inputs,
@@ -315,7 +323,7 @@ class ChatStreamService:
             yield event
         if interrupted:
             yield StreamEvent(
-                "done", {"usage": None, "finish_reason": "interrupt"}
+                "done", {"usage": None, "finish_reason": "interrupt", "trace_id": active_trace_id}
             )
             return
         yield StreamEvent(
@@ -323,6 +331,7 @@ class ChatStreamService:
             {
                 "usage": mapper.usage.to_dict(),
                 "finish_reason": "stop",
+                "trace_id": active_trace_id,
             },
         )
 
@@ -333,6 +342,7 @@ class ChatStreamService:
         user_id: Optional[str] = None,
         token_scope: str = TOKEN_SCOPE_ALL,
         llm: Optional[Any] = None,
+        trace_id: Optional[str] = None,
     ) -> AsyncIterator[StreamEvent]:
         """Yield protocol events for one question turn.
 
@@ -355,6 +365,7 @@ class ChatStreamService:
             config,
             thread_id,
             token_scope,
+            trace_id=trace_id,
         ):
             yield event
 
@@ -364,6 +375,7 @@ class ChatStreamService:
         user_id: Optional[str] = None,
         resume_value: Any = True,
         token_scope: str = TOKEN_SCOPE_ALL,
+        trace_id: Optional[str] = None,
     ) -> AsyncIterator[StreamEvent]:
         """Resume an interrupted turn via ``Command(resume=...)``.
 
@@ -378,6 +390,7 @@ class ChatStreamService:
             config,
             thread_id,
             token_scope,
+            trace_id=trace_id,
         ):
             yield event
 

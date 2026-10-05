@@ -354,14 +354,14 @@ async function consumeSSE(response, onEvent) {
 ```jsonc
 {"type":"token","text":"你好","turn":1}
 {"type":"node_start","node":"agent"}
-{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"pending","detail":{"request":{"messages":[...],"tools_bound":[...],"node":"agent"}},"duration_ms":null,"conversation_id":"conversation-...","llm_call_id":"01a1..."}
-{"type":"trace","seq":1,"kind":"http","name":"llm_request","status":"pending","detail":{"method":"POST","url":"https://.../chat/completions","attempt":1,"headers":{...},"body":"{...}"},"duration_ms":null,"llm_call_id":"01a1..."}
-{"type":"trace","seq":1,"kind":"http","name":"llm_response","status":"ok","detail":{"method":"POST","url":"https://.../chat/completions","attempt":1,"status_code":200},"duration_ms":378.1,"llm_call_id":"01a1..."}
-{"type":"trace","seq":2,"kind":"tool","name":"web_search","status":"running","detail":{"arguments":{"query":"news"}},"duration_ms":null,"tool_call_id":"call_1"}
+{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"pending","detail":{"request":{"messages":[...],"tools_bound":[...],"node":"agent"}},"duration_ms":null,"conversation_id":"conversation-...","trace_id":"tr-e6bdd33e","llm_call_id":"01a1..."}
+{"type":"trace","seq":1,"kind":"http","name":"http_request","status":"pending","detail":{"method":"POST","url":"https://.../chat/completions","attempt":1,"headers":{...},"body":"{...}"},"duration_ms":null,"trace_id":"tr-e6bdd33e","llm_call_id":"01a1..."}
+{"type":"trace","seq":1,"kind":"http","name":"http_response","status":"ok","detail":{"method":"POST","url":"https://.../chat/completions","attempt":1,"status_code":200},"duration_ms":378.1,"trace_id":"tr-e6bdd33e","llm_call_id":"01a1..."}
+{"type":"trace","seq":2,"kind":"tool","name":"web_search","status":"running","detail":{"arguments":{"query":"news"}},"duration_ms":null,"trace_id":"tr-e6bdd33e","tool_call_id":"call_1"}
 // 同 seq 的 llm/tool 行会再发一次，status 从 pending/running 变成 ok/error，
 // detail 里补上聚合响应/工具结果和耗时；客户端应按 seq 覆盖同一行。
-{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"ok","detail":{"request":{...},"response":{"role":"assistant","content":"...","tool_calls":[{"name":"web_search","args":{...}}],"usage":{...}}},"duration_ms":812.4,"llm_call_id":"01a1..."}
-{"type":"trace","seq":2,"kind":"tool","name":"web_search","status":"ok","detail":{"arguments":{"query":"news"},"result":"Web search results..."},"duration_ms":1204.7,"tool_call_id":"call_1"}
+{"type":"trace","seq":0,"kind":"llm","name":"llm_call","status":"ok","detail":{"request":{...},"response":{"role":"assistant","content":"...","tool_calls":[{"name":"web_search","args":{...}}],"usage":{...}}},"duration_ms":812.4,"trace_id":"tr-e6bdd33e","llm_call_id":"01a1..."}
+{"type":"trace","seq":2,"kind":"tool","name":"web_search","status":"ok","detail":{"arguments":{"query":"news"},"result":"Web search results..."},"duration_ms":1204.7,"trace_id":"tr-e6bdd33e","tool_call_id":"call_1"}
 {"type":"interrupt","thread_id":"conv-1","question":"即将调用外部工具 web_search，是否继续？","resume_key":"conv-1:call_1","tools":[...]}
 {"type":"done","usage":{"input_tokens":812,"output_tokens":96},"finish_reason":"stop"}
 {"type":"error","message":"...","code":"upstream"}
@@ -499,26 +499,26 @@ chunk 再 `record_local("agent", ...)`，那等于把 langchain-core 已经做�
 | 条目 | 谁记的 | 回答什么 | 有没有 payload |
 |---|---|---|---|
 | `llm_call` | `on_chat_model_start` / `on_llm_end` | **模型说了什么**：合并后的回答、`tool_calls`、`usage`、`finish_reason` | 有（聚合后的语义） |
-| `llm_request` | httpx `request` hook | **实际发出去什么**：method/url/headers/**原始 body** | 有（wire 上的原文 JSON） |
-| `llm_response` | httpx `response` hook | **网络层发生了什么**：attempt、status_code、耗时 | 没有 body（见下） |
+| `http_request` | httpx `request` hook | **实际发出去什么**：method/url/headers/**原始 body** | 有（wire 上的原文 JSON） |
+| `http_response` | httpx `response` hook | **网络层发生了什么**：attempt、status_code、耗时 | 没有 body（见下） |
 
-`llm_request.body` 和 `llm_call` 的 request **不是同一份东西**，各有不可替代的
+`http_request.body` 和 `llm_call` 的 request **不是同一份东西**，各有不可替代的
 信息：
 
 - `llm_call` 的 request 是 LangChain **侧**重建的摘要（消息列表 + 工具名 +
   `stream` 开关），可读性好，但没有 `stream_options`、没有真实的 tool schema JSON。
-- `llm_request.body` 是 httpx 上**真正的字节**，因此含 langchain-openai 内部
+- `http_request.body` 是 httpx 上**真正的字节**，因此含 langchain-openai 内部
   补上的字段（`stream`、`stream_options`）和逐字的 tool 定义。想复现"模型为什么
   不调工具"，只能看这条。
 
-`llm_response` 没有 body 是**刻意的**：chat-completion 走 SSE 流式返回，在
+`http_response` 没有 body 是**刻意的**：chat-completion 走 SSE 流式返回，在
 response hook 里读 body 会把流偷走，让 LangChain 自己的消费者拿不到内容。聚合后
 的回答由 `llm_call` 那条提供，所以信息并没有丢。
 
 `llm_call_id` 的串联方式：`on_chat_model_start` 把当前最内层 run_id 写进
 ContextVar → httpx `request` hook 读到后盖到 request 的 extensions →
 `response` hook 再读回来。所以同一次调用的三条 trace 带同一个 `llm_call_id`
-（OpenAI SDK 内部重试会产生 attempt 更高的一对，同样归到同一个 id 下）。
+（OpenAI SDK 内部重试会产生 attempt 更高的一对，同样归到同一个 id 下）。同时每轮问答带有独立的 `trace_id`，在 UI 对话消息下方展示，并在新轮次时自动折叠历史 Trace。
 
 实现见 `langchain_agent/app/call_trace.py`：一个 `contextvars.ContextVar`
 按"一轮对话"作用域收集条目（`trace_scope()`），`LlmTraceHandler`（通过

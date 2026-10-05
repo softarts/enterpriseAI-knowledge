@@ -13,6 +13,7 @@ export default function ChatWindow({
   onInterruptConfirm,
   conversationId = null,
   onNewConversation,
+  onTraceClick = null,
 }) {
   const endRef = useRef(null);
 
@@ -63,7 +64,13 @@ export default function ChatWindow({
         )}
 
         {messages.map((m, i) => (
-          <Message key={i} role={m.role} content={m.content} />
+          <Message
+            key={i}
+            role={m.role}
+            content={m.content}
+            traceId={m.traceId}
+            onTraceClick={onTraceClick}
+          />
         ))}
 
         {loading && !streamingHasText && (

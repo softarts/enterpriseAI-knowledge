@@ -104,6 +104,7 @@ async def chat_stream(
     raw_request: Request,
     conversation_id: str = Header(alias="X-Conversation-Id"),
     user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    trace_id: Optional[str] = Header(default=None, alias="X-Trace-Id"),
 ) -> StreamingResponse:
     """
     Stream one chat turn as Server-Sent Events.
@@ -116,6 +117,7 @@ async def chat_stream(
     underlying graph execution is cancelled.
     """
     token_scope = request.token_scope
+    active_trace_id = request.trace_id or trace_id
 
     async def event_stream():
         task = asyncio.current_task()
@@ -127,6 +129,7 @@ async def chat_stream(
                 thread_id=conversation_id,
                 user_id=user_id,
                 token_scope=token_scope,
+                trace_id=active_trace_id,
             ):
                 # Propagate client disconnects as cancellation of the graph run.
                 if await raw_request.is_disconnected():
@@ -147,6 +150,7 @@ async def chat_resume(
     request: ChatResumeRequest,
     conversation_id: str = Header(alias="X-Conversation-Id"),
     user_id: Optional[str] = Header(default=None, alias="X-User-Id"),
+    trace_id: Optional[str] = Header(default=None, alias="X-Trace-Id"),
 ) -> StreamingResponse:
     """
     Resume a turn paused by the HITL gate (before an internet-touching tool).
@@ -155,6 +159,7 @@ async def chat_resume(
     LLM call that requested the tool is not repeated.
     """
     resume_value = request.resume if request.resume is not None else True
+    active_trace_id = request.trace_id or trace_id
 
     async def event_stream():
         async for event in _chat_stream_service.stream_resume(
@@ -162,6 +167,7 @@ async def chat_resume(
             user_id=user_id,
             resume_value=resume_value,
             token_scope=request.token_scope,
+            trace_id=active_trace_id,
         ):
             yield event.to_sse()
 

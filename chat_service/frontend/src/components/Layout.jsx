@@ -16,6 +16,11 @@ export default function Layout({
   traceCollapsed,
   onToggleTrace,
   trace,
+  conversationId,
+  roundTraces = [],
+  archivedTraces = [],
+  activeTraceOpen = true,
+  onToggleActiveTrace,
   activeView,
   onViewChange,
   showTrace,
@@ -90,6 +95,11 @@ export default function Layout({
           collapsed={traceCollapsed}
           onToggle={onToggleTrace}
           trace={trace}
+          conversationId={conversationId}
+          roundTraces={roundTraces}
+          archivedTraces={archivedTraces}
+          activeTraceOpen={activeTraceOpen}
+          onToggleActiveTrace={onToggleActiveTrace}
           onDividerMouseDown={!traceCollapsed ? onDividerMouseDown : undefined}
         />
       ) : (

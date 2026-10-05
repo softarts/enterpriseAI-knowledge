@@ -26,6 +26,7 @@ class StreamChatRequest(BaseModel):
         "all",
         description='Token scope: "all" or "final".',
     )
+    trace_id: Optional[str] = Field(None, description="Optional trace ID for this round.")
 
 
 class ChatResumeRequest(BaseModel):
@@ -34,3 +35,4 @@ class ChatResumeRequest(BaseModel):
         description="Value passed to Command(resume=...); false rejects the pending tool call.",
     )
     token_scope: str = Field("all", description='Token scope: "all" or "final".')
+    trace_id: Optional[str] = Field(None, description="Optional trace ID for this round.")

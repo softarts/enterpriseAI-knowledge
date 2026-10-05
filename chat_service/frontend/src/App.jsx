@@ -33,6 +33,8 @@ export default function App() {
   // activity timeline (tool_call/tool_result + trace entries, in arrival
   // order) feeding the Trace panel, and any pending HITL confirmation.
   const [timeline, setTimeline] = useState([]);
+  // Completed rounds in the active conversation, kept collapsed in TracePanel.
+  const [roundTraces, setRoundTraces] = useState([]);
   // Traces from earlier conversations, kept so starting a new conversation
   // archives rather than discards them. Each entry is a self-contained
   // {conversation_id, steps} snapshot.
@@ -40,6 +42,9 @@ export default function App() {
   const [activeTraceOpen, setActiveTraceOpen] = useState(true);
   const [pendingInterrupt, setPendingInterrupt] = useState(null);
   const streamingIndexRef = useRef(null);
+  const roundCounterRef = useRef(0);
+  const currentTraceIdRef = useRef(null);
+  const currentQuestionRef = useRef("");
 
   // Ask (RAG) — independent state so switching views preserves history
   const [askMessages, setAskMessages] = useState([]);
@@ -66,11 +71,6 @@ export default function App() {
         break; // reserved for step indicators
       case "tool_call":
       case "tool_result":
-        // No longer sent. Both duplicated a `trace` row that already carried
-        // the same information: the model's decision to call a tool is on the
-        // `llm_call` row (response.tool_calls), and the execution is on the
-        // `tool` row (arguments/result/status/duration, keyed by
-        // tool_call_id). Rendering them again made one search look like two.
         break;
       case "trace":
         // Aggregated LLM calls (kind "llm", carrying the real request and the
@@ -80,6 +80,9 @@ export default function App() {
         // rows arrive twice — once while still in flight, once finalized —
         // and the second one replaces the first.
         if (event.conversation_id) setConversationId(event.conversation_id);
+        if (event.trace_id && !currentTraceIdRef.current) {
+          currentTraceIdRef.current = event.trace_id;
+        }
         setTimeline((prev) => {
           const row = {
             seq: event.seq,
@@ -89,6 +92,7 @@ export default function App() {
             detail: event.detail,
             durationMs: event.duration_ms,
             conversationId: event.conversation_id,
+            traceId: event.trace_id || currentTraceIdRef.current,
             llmCallId: event.llm_call_id,
             toolCallId: event.tool_call_id,
           };
@@ -125,16 +129,43 @@ export default function App() {
   async function handleSend(question) {
     const controller = new AbortController();
     chatRequestRef.current = controller;
+
+    // 1. Collapse the current round's trace into roundTraces instead of deleting it
+    if (timeline.length > 0) {
+      const prevTrace = buildTraceFromTimeline(timeline, currentTraceIdRef.current, roundCounterRef.current);
+      prevTrace.request = { question: currentQuestionRef.current };
+      setRoundTraces((prev) => [
+        ...prev,
+        {
+          key: currentTraceIdRef.current || `round-${roundCounterRef.current}`,
+          round: roundCounterRef.current,
+          traceId: currentTraceIdRef.current,
+          question: currentQuestionRef.current,
+          trace: prevTrace,
+        },
+      ]);
+    }
+
+    // 2. Start a new round with fresh traceId
+    roundCounterRef.current += 1;
+    const newTraceId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? `tr-${crypto.randomUUID().slice(0, 8)}`
+        : `tr-${Date.now().toString(36)}`;
+    currentTraceIdRef.current = newTraceId;
+    currentQuestionRef.current = question;
+
     setMessages((prev) => [
       ...prev,
       { role: "user", content: question },
-      { role: "assistant", content: "" },
+      { role: "assistant", content: "", traceId: newTraceId },
     ]);
     // The assistant placeholder is the last message.
     streamingIndexRef.current = null;
     setLoading(true);
     setTimeline([]);
     setPendingInterrupt(null);
+    setActiveTraceOpen(true);
 
     // Resolve the placeholder index after the state update is queued.
     const placeholderIndex = messages.length + 1;
@@ -144,6 +175,7 @@ export default function App() {
       await askQuestionStream(question, {
         signal: controller.signal,
         onEvent: handleStreamEvent,
+        traceId: newTraceId,
       });
     } catch (err) {
       if (err.name === "AbortError") {
@@ -187,25 +219,48 @@ export default function App() {
       chatRequestRef.current = null;
       cancelStream();
     }
-    if (timeline.length > 0) {
-      const snapshot = buildTraceFromTimeline(timeline);
+    const allSteps = [
+      ...roundTraces.flatMap((r) => r.trace?.steps || []),
+      ...(timeline.length > 0
+        ? buildTraceFromTimeline(timeline, currentTraceIdRef.current, roundCounterRef.current).steps
+        : []),
+    ];
+    if (allSteps.length > 0) {
       setArchivedTraces((prev) =>
         [
           ...prev,
           {
-            key: `${snapshot.conversationId}-${prev.length}`,
-            conversationId: snapshot.conversationId,
-            trace: snapshot,
+            key: `${conversationId}-${prev.length}`,
+            conversationId,
+            trace: {
+              conversationId,
+              steps: allSteps,
+            },
           },
         ].slice(-MAX_ARCHIVED_TRACES)
       );
     }
     setConversationId(newConversationId());
+    setRoundTraces([]);
     setTimeline([]);
+    roundCounterRef.current = 0;
+    currentTraceIdRef.current = null;
+    currentQuestionRef.current = "";
     setActiveTraceOpen(true);
     setPendingInterrupt(null);
     setLoading(false);
     streamingIndexRef.current = null;
+  }
+
+  function handleTraceClick(traceId) {
+    setTraceCollapsed(false);
+    setActiveTraceOpen(true);
+    setTimeout(() => {
+      const el = document.getElementById(`trace-round-${traceId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }, 100);
   }
 
   async function handleInterruptConfirm(resume) {
@@ -217,6 +272,7 @@ export default function App() {
       await resumeStream(resume, {
         signal: controller.signal,
         onEvent: handleStreamEvent,
+        traceId: currentTraceIdRef.current,
       });
     } catch (err) {
       if (err.name !== "AbortError") {
@@ -268,35 +324,44 @@ export default function App() {
   }
 
   // How many finished conversations' traces to keep collapsed in the panel.
-// Bounded because each one holds full request/response payloads.
-const MAX_ARCHIVED_TRACES = 5;
+  // Bounded because each one holds full request/response payloads.
+  const MAX_ARCHIVED_TRACES = 5;
 
-// Convert the event timeline into the `{steps}` shape TracePanel renders.
-// Shared by the live trace and the archived snapshots so both render
-// identically. Every row is a `trace` event — `tool_call`/`tool_result` are
-// no longer emitted, so no synthetic rows are needed here.
-function buildTraceFromTimeline(timeline) {
-  return {
-    conversationId:
-      timeline.find((item) => item.conversationId)?.conversationId || null,
-    steps: timeline.map((item) => ({
-      kind: item.kind, // "llm" | "tool" | "http" | "local"
-      name: item.name,
-      status: item.status,
-      detail: item.detail,
-      duration_ms: item.durationMs,
-      conversation_id: item.conversationId,
-    })),
-  };
-}
+  // Convert the event timeline into the `{steps}` shape TracePanel renders.
+  // Shared by the live trace and the archived snapshots so both render
+  // identically.
+  function buildTraceFromTimeline(timeline, traceId = null, round = null) {
+    return {
+      trace_id:
+        traceId ||
+        timeline.find((item) => item.traceId)?.traceId ||
+        null,
+      round,
+      conversationId:
+        timeline.find((item) => item.conversationId)?.conversationId || null,
+      steps: timeline.map((item) => ({
+        kind: item.kind, // "llm" | "tool" | "http" | "local"
+        name: item.name,
+        status: item.status,
+        detail: item.detail,
+        duration_ms: item.durationMs,
+        conversation_id: item.conversationId,
+        trace_id: item.traceId,
+        llm_call_id: item.llmCallId,
+        tool_call_id: item.toolCallId,
+      })),
+    };
+  }
 
-// Tool calls, aggregated LLM calls, HTTP (LLM API) attempts and local
+  // Tool calls, aggregated LLM calls, HTTP (LLM API) attempts and local
   // function spans are all shown in the Trace panel, not inline in the chat
   // window — the chat window should only show the final answer.
-  const chatTrace = useMemo(
-    () => (timeline.length > 0 ? buildTraceFromTimeline(timeline) : null),
-    [timeline]
-  );
+  const chatTrace = useMemo(() => {
+    if (timeline.length === 0) return null;
+    const t = buildTraceFromTimeline(timeline, currentTraceIdRef.current, roundCounterRef.current);
+    t.request = { question: currentQuestionRef.current };
+    return t;
+  }, [timeline]);
 
   return (
     <Layout
@@ -306,6 +371,7 @@ function buildTraceFromTimeline(timeline) {
       onToggleTrace={() => setTraceCollapsed((v) => !v)}
       trace={activeView === "ask" ? askTrace : activeView === "chat" ? chatTrace : null}
       conversationId={conversationId}
+      roundTraces={activeView === "chat" ? roundTraces : []}
       archivedTraces={activeView === "chat" ? archivedTraces : []}
       activeTraceOpen={activeTraceOpen}
       onToggleActiveTrace={() => setActiveTraceOpen((v) => !v)}
@@ -323,6 +389,7 @@ function buildTraceFromTimeline(timeline) {
           onInterruptConfirm={handleInterruptConfirm}
           conversationId={conversationId}
           onNewConversation={handleNewConversation}
+          onTraceClick={handleTraceClick}
         />
       ) : activeView === "ask" ? (
         <AskWindow messages={askMessages} loading={askLoading} onSend={handleAskSend} />

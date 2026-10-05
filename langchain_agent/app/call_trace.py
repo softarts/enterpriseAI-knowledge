@@ -33,7 +33,7 @@ a different question from the ``llm`` entry ("what did the model say"), which is
 why both exist for every call: ``on_chat_model_start`` publishes the innermost
 in-flight run_id into a ContextVar, the httpx request hook stamps it onto the
 request's extensions, and the response hook reads it back, so every
-``llm_request``/``llm_response`` pair carries the same ``llm_call_id`` as the
+``http_request``/``http_response`` pair carries the same ``llm_call_id`` as the
 ``llm`` row it belongs under. The request body in particular is only visible at
 this layer — it is captured off httpx's replayable ``ByteStream``, so it
 includes the ``stream`` / ``stream_options`` flags and exact tool schema that
@@ -88,9 +88,11 @@ def _log_entry(entry: Dict[str, Any]) -> None:
     (which the UI only ever sees for the request that's still in flight).
     """
     try:
+        trace_tag = f"[{entry.get('trace_id')}]" if entry.get("trace_id") else ""
         logger.info(
-            "call_trace.entry [%s] %s",
+            "call_trace.entry [%s]%s %s",
             _short_conversation(entry),
+            trace_tag,
             json.dumps(entry, ensure_ascii=False, default=str),
         )
     except Exception:  # noqa: BLE001 - tracing must never break a real request
@@ -115,6 +117,11 @@ _CURRENT_CONVERSATION: ContextVar[Optional[str]] = ContextVar(
     "call_trace_conversation_id", default=None
 )
 
+# Trace (round) id for the turn being traced. Set by trace_scope().
+_CURRENT_TRACE_ID: ContextVar[Optional[str]] = ContextVar(
+    "call_trace_trace_id", default=None
+)
+
 # Bound on error strings only. Request/response/tool payloads are NOT clipped:
 # the trace is a debugging tool, and a silently shortened body is worse than a
 # long one (you cannot tell a truncated payload from a genuinely small one).
@@ -128,12 +135,15 @@ def _error_text(error: BaseException) -> str:
 
 
 @contextmanager
-def trace_scope(conversation_id: Optional[str] = None) -> Iterator[List[Dict[str, Any]]]:
+def trace_scope(
+    conversation_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+) -> Iterator[List[Dict[str, Any]]]:
     """Open a fresh per-turn trace sink; yields the list entries land in.
 
-    ``conversation_id`` is stamped onto every entry recorded in this scope
-    (see ``_append_timed``) so a trace row or log line is attributable to a
-    conversation without having to correlate by timestamp.
+    ``conversation_id`` and ``trace_id`` are stamped onto every entry recorded
+    in this scope (see ``_append_timed``) so a trace row or log line is
+    attributable to a conversation and round without having to correlate by timestamp.
 
     Safe to nest/reuse across the sync (`invoke`) and async (`astream`)
     graph entry points — each call gets its own list and context token.
@@ -152,9 +162,14 @@ def trace_scope(conversation_id: Optional[str] = None) -> Iterator[List[Dict[str
     entries: List[Dict[str, Any]] = []
     token = _SINK.set(entries)
     conversation_token = _CURRENT_CONVERSATION.set(conversation_id)
+    trace_id_token = _CURRENT_TRACE_ID.set(trace_id)
     try:
         yield entries
     finally:
+        try:
+            _CURRENT_TRACE_ID.reset(trace_id_token)
+        except ValueError:
+            logger.debug("call_trace.trace_scope.cross_context_reset", exc_info=True)
         try:
             _CURRENT_CONVERSATION.reset(conversation_token)
         except ValueError:
@@ -197,6 +212,7 @@ def _append_timed(
         # log line or trace row is self-identifying — several conversations
         # interleave in one log file and one UI timeline.
         "conversation_id": _CURRENT_CONVERSATION.get(),
+        "trace_id": _CURRENT_TRACE_ID.get(),
     }
     if extra:
         entry.update(extra)
@@ -268,7 +284,7 @@ def _on_request(request: Any) -> None:
             request.extensions["call_trace_llm_call_id"] = llm_call_id
         _append_timed(
             "http",
-            "llm_request",
+            "http_request",
             {
                 "method": request.method,
                 "url": str(request.url),
@@ -296,7 +312,7 @@ def _on_response(response: Any) -> None:
         llm_call_id = request.extensions.get("call_trace_llm_call_id")
         _append_timed(
             "http",
-            "llm_response",
+            "http_response",
             {
                 "method": request.method,
                 "url": str(request.url),
