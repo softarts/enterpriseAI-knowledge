@@ -3,11 +3,14 @@
 Four kinds of entries, deliberately kept separate so the UI can badge them
 differently:
 
-- ``kind="llm"``  — **one entry per LLM call**, carrying that call's request
-  and its *aggregated* response. Produced by ``LlmTraceHandler`` from
-  LangChain's ``on_chat_model_start`` / ``on_llm_end`` callbacks, so it is
-  emitted exactly once per call regardless of how the provider streamed the
-  answer on the wire.
+- ``kind="llm"`` (name ``agent``) — **one entry per LLM call**, carrying that
+  call's request and its *aggregated* response. Produced by
+  ``LlmTraceHandler`` from LangChain's ``on_chat_model_start`` /
+  ``on_llm_end`` callbacks, so it is emitted exactly once per call regardless
+  of how the provider streamed the answer on the wire. It is named ``agent``
+  because it is the agent node's model call — the row that shows what the
+  model decided (answer text or tool calls) — while the ``http`` rows
+  underneath show the raw transport attempts.
 - ``kind="tool"`` — one entry per executed tool call, from ``on_tool_start`` /
   ``on_tool_end``. This is the only layer that can see tools whose HTTP
   transport is *not* httpx: ``web_search`` reaches Tavily through
@@ -38,9 +41,11 @@ request's extensions, and the response hook reads it back, so every
 this layer — it is captured off httpx's replayable ``ByteStream``, so it
 includes the ``stream`` / ``stream_options`` flags and exact tool schema that
 langchain-openai adds internally, which the ``llm`` row's LangChain-side
-request summary cannot show. The response body is deliberately never read (it
-is an SSE stream LangChain is consuming); the aggregated answer lives on the
-``llm`` row.
+request summary cannot show. The raw response body is deliberately never read
+(it is an SSE stream LangChain is consuming); instead, once the stream has been
+merged, ``_end_llm_call`` writes the *aggregated* response into the matching
+``http_response`` entry in place, so the transport row shows the same payload
+as its parent ``agent`` row without stealing the stream.
 
 Entries are collected per-turn via a ``contextvars.ContextVar`` so concurrent
 requests (and the sync/async boundary LangChain crosses internally) don't mix
@@ -116,6 +121,14 @@ _CURRENT_LLM_CALL: ContextVar[Optional[str]] = ContextVar(
 _CURRENT_CONVERSATION: ContextVar[Optional[str]] = ContextVar(
     "call_trace_conversation_id", default=None
 )
+
+# llm_call_id -> the in-flight `http_response` entry for that call. The
+# response hook fires when the status line arrives (the SSE body is still
+# streaming), so it cannot record the answer itself; the callback layer
+# (``_end_llm_call``) looks the entry up here and writes the aggregated
+# response into it in place, so the transport row ends up carrying the same
+# payload as its parent `agent` row.
+_HTTP_RESPONSE_BY_LLM_CALL: Dict[str, Dict[str, Any]] = {}
 
 # Trace (round) id for the turn being traced. Set by trace_scope().
 _CURRENT_TRACE_ID: ContextVar[Optional[str]] = ContextVar(
@@ -305,12 +318,13 @@ def _on_response(response: Any) -> None:
         attempt = request.extensions.get("call_trace_attempt")
         started = request.extensions.get("call_trace_started")
         duration_ms = (time.perf_counter() - started) * 1000 if started is not None else None
-        # Response body is intentionally never read here: chat-completion
+        # The raw response body is intentionally never read here: chat-completion
         # calls stream as SSE, and consuming the body in this hook would steal
-        # it from LangChain's own stream consumer. The aggregated answer is
-        # recorded instead by the `kind="llm"` entry's response.
+        # it from LangChain's own stream consumer. The *aggregated* answer is
+        # written into this entry later, in place, by ``_end_llm_call`` once
+        # langchain-core has merged the stream.
         llm_call_id = request.extensions.get("call_trace_llm_call_id")
-        _append_timed(
+        entry = _append_timed(
             "http",
             "http_response",
             {
@@ -323,6 +337,13 @@ def _on_response(response: Any) -> None:
             duration_ms=duration_ms,
             extra={"llm_call_id": llm_call_id} if llm_call_id else None,
         )
+        # Remember this row so the callback layer can write the aggregated
+        # response into it once the stream has been merged (see
+        # ``_end_llm_call``). The dict is the same object the sink holds, so
+        # the in-place update is visible to the log, the SSE drain, and the
+        # non-streaming TraceBuilder alike.
+        if llm_call_id is not None:
+            _HTTP_RESPONSE_BY_LLM_CALL[llm_call_id] = entry
     except Exception:  # noqa: BLE001 - tracing must never break a real request
         logger.debug("call_trace.on_response.failed", exc_info=True)
 
@@ -476,7 +497,8 @@ def _summarize_llm_result(response: Any) -> Optional[Dict[str, Any]]:
 
 
 class LlmTraceHandler(BaseCallbackHandler):
-    """Records one ``kind="llm"`` entry per LLM call and one per tool call.
+    """Records one ``kind="llm"`` (name ``agent``) entry per LLM call and one
+    per tool call.
 
     Each LLM call produces exactly one sink append: a provisional entry at
     ``on_chat_model_start`` carrying the request, which is then updated **in
@@ -484,7 +506,10 @@ class LlmTraceHandler(BaseCallbackHandler):
     update matters for the streaming UI: ``chat_stream.py`` drains the sink
     incrementally as the run progresses, so an entry appended only at the end
     would land after every ``tool_call``/``tool_result`` event instead of in
-    its real position.
+    its real position. ``_end_llm_call`` also mirrors the aggregated response
+    onto the call's ``http_response`` row (see
+    ``_HTTP_RESPONSE_BY_LLM_CALL``), so the transport layer shows the same
+    payload without the response hook ever reading the SSE stream.
 
     Subclassing ``BaseCallbackHandler`` (rather than writing a bare object)
     is what makes LangChain accept it — the callback manager reads
@@ -538,7 +563,7 @@ class LlmTraceHandler(BaseCallbackHandler):
             request["node"] = node
         entry = _append_timed(
             "llm",
-            "llm_call",
+            "agent",
             {"request": request},
             status="pending",
             extra={"llm_call_id": run_id},
@@ -576,6 +601,24 @@ class LlmTraceHandler(BaseCallbackHandler):
         # Re-log the finalized row so the log file carries the aggregated
         # response too, not just the provisional request.
         _log_entry(entry)
+        # Mirror the aggregated response onto the transport row(s) of this
+        # call, so `http_response` is not just "status 200" but shows the
+        # same payload as the `agent` row. The response hook fired when the
+        # status line arrived (the SSE body was still streaming, so it could
+        # not read it); this is where the merged answer lands. Re-logging
+        # mirrors the finalized row into the log file, matching the `agent`
+        # row above.
+        http_entry = _HTTP_RESPONSE_BY_LLM_CALL.pop(run_id, None)
+        if http_entry is not None:
+            http_detail = http_entry.get("detail")
+            if not isinstance(http_detail, dict):
+                http_detail = {}
+            if summary is not None:
+                http_detail["response"] = summary
+            if error is not None:
+                http_detail["error"] = _error_text(error)
+            http_entry["detail"] = http_detail
+            _log_entry(http_entry)
 
     def _begin_tool_call(
         self,

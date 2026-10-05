@@ -5,7 +5,7 @@ without a live LLM:
 
     1. custom token payloads become token events
     2. custom tool-call payloads are tracked but NOT emitted (they duplicate
-       the llm_call trace row)
+       the agent trace row)
     3. tool results and usage are derived from the final state
     4. interrupt payloads are synthesized from __interrupt__
     5. token_scope="final" buffers the first round unless a tool call follows
@@ -156,7 +156,7 @@ class StreamEventMapperTest(unittest.TestCase):
         """The custom-channel tool call must NOT become a `tool_call` event.
 
         It is still tracked (token scoping depends on knowing a tool was
-        called), but the information is already carried by the `llm_call`
+        called), but the information is already carried by the `agent`
         trace row's ``response.tool_calls`` and by the tool's own `tool` row.
         Emitting it as an event too showed one search as two rows.
         """
