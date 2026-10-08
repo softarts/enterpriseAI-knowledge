@@ -15,20 +15,22 @@ class MemoryManager:
         self.user_id = user_id
         self.checkpointer = MemorySaver()
         self.store = InMemoryStore()
+        self._conversations: Dict[str, List[Dict[str, Any]]] = {}
         
         # Initialize namespace for user
         self._user_namespace = (user_id,)
     
     def save_conversation(self, thread_id: str, messages: List[Dict[str, Any]]):
         """Save conversation messages to short-term memory."""
-        # This is handled by LangGraph checkpointer automatically
-        # We just provide the checkpointer instance
-        pass
+        self._conversations[thread_id] = [message.copy() for message in messages]
     
     def get_conversation_history(self, thread_id: str) -> List[Dict[str, Any]]:
         """Get conversation history from short-term memory."""
-        # This will be handled by the graph's checkpointer
-        return []
+        return [message.copy() for message in self._conversations.get(thread_id, [])]
+
+    def clear_conversation(self, thread_id: str):
+        """Clear short-term memory for a conversation."""
+        self._conversations.pop(thread_id, None)
     
     def save_to_long_term(self, key: str, value: Any):
         """Save data to long-term memory (in-memory store)."""

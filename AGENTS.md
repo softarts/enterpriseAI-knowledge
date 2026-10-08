@@ -78,3 +78,9 @@ The supported Python runtime is Python 3.14.
 - Keep tests under the `test/` or `tests/` directory of the module they test.
 - Do not create or use a repository-root `test/` or `tests/` directory for new tests.
 - Run module tests from the repository root using their module-relative path.
+
+## Approval before implementation
+
+- For implementation requests, first present a concrete solution proposal and wait for the user's explicit approval before changing source code, tests, configuration, or feature documentation.
+- Do not treat a bug report or request for a solution as approval to implement it. If the user asks only for a proposal, provide the proposal and stop.
+- After approval, implement only the approved scope. Ask again before making materially different design choices or expanding the scope.

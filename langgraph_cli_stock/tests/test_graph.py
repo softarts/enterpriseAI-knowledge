@@ -62,6 +62,29 @@ class TestAgentState(unittest.TestCase):
 class TestToolCallHandling(unittest.TestCase):
     """Test parsing and executing LLM tool calls."""
 
+    def test_model_prompt_includes_current_date_for_relative_dates(self):
+        from app.graph import model_node
+        from app.state import AgentState
+
+        client = MagicMock()
+        client.chat.return_value = {
+            "choices": [{"message": {"content": "查询 AAPL 昨天的收盘价。"}}]
+        }
+
+        with (
+            patch("app.graph.get_llm_client", return_value=client),
+            patch("app.graph._get_current_date", return_value="2026-10-08")
+        ):
+            model_node(AgentState(
+                messages=[{"role": "user", "content": "昨天"}],
+                trace_id="test-trace"
+            ))
+
+        system_prompt = client.chat.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("Today's date is 2026-10-08", system_prompt)
+        self.assertIn("昨天", system_prompt)
+        self.assertIn("retain the stock symbol", system_prompt)
+
     def test_graph_parses_json_arguments_and_executes_tool_call(self):
         from app.graph import run_agent
 
@@ -127,6 +150,68 @@ class TestToolCallHandling(unittest.TestCase):
                 model_node(AgentState(trace_id="test-trace"))
 
 
+class TestConversationContinuity(unittest.TestCase):
+    def test_run_agent_includes_prior_turns(self):
+        from app.graph import run_agent
+
+        graph = MagicMock()
+        graph.invoke.return_value = {
+            "final_answer": "The date is 2024-11-27.",
+            "tool_calls": [],
+            "tool_results": []
+        }
+        history = [
+            {"role": "user", "content": "aapl的收盘价"},
+            {"role": "assistant", "content": "请提供日期。"}
+        ]
+
+        with patch("app.graph.get_graph", return_value=graph):
+            answer = run_agent(
+                "昨天",
+                user_id="test-user",
+                trace_id="test-trace",
+                thread_id="test-thread",
+                conversation_history=history
+            )
+
+        self.assertEqual(answer, "The date is 2024-11-27.")
+        self.assertEqual(
+            graph.invoke.call_args.args[0].messages,
+            history + [{"role": "user", "content": "昨天"}]
+        )
+
+    def test_cli_passes_and_saves_conversation_history(self):
+        from app.cli import CLI
+
+        cli = CLI("test-user")
+        with (
+            patch("builtins.input", side_effect=["aapl的收盘价", "昨天", "/exit"]),
+            patch("app.cli.run_agent", side_effect=["请提供日期。", "AAPL 昨天收盘价为 $100。"]) as run_agent,
+            patch("app.cli.setup_logging", return_value=MagicMock()),
+            patch("app.cli.generate_trace_id", side_effect=["trace-1", "trace-2"]),
+            patch.object(cli, "print_welcome"),
+            self.assertRaises(SystemExit)
+        ):
+            cli.run()
+
+        self.assertEqual(
+            run_agent.call_args_list[1].kwargs["conversation_history"],
+            [
+                {"role": "user", "content": "aapl的收盘价"},
+                {"role": "assistant", "content": "请提供日期。"}
+            ]
+        )
+        self.assertEqual(
+            cli.memory.get_conversation_history("test-user"),
+            [
+                {"role": "user", "content": "aapl的收盘价"},
+                {"role": "assistant", "content": "请提供日期。"},
+                {"role": "user", "content": "昨天"},
+                {"role": "assistant", "content": "AAPL 昨天收盘价为 $100。"}
+            ]
+        )
+
+
 class TestMemory(unittest.TestCase):
     """Test memory management."""
     
@@ -138,6 +223,21 @@ class TestMemory(unittest.TestCase):
         
         self.assertIsInstance(memory, MemoryManager)
         self.assertEqual(memory.user_id, "user123")
+
+    def test_conversation_history_can_be_saved_loaded_and_cleared(self):
+        from app.memory import create_memory_manager
+
+        memory = create_memory_manager("user123")
+        messages = [{"role": "user", "content": "AAPL close"}]
+        memory.save_conversation("thread-1", messages)
+        messages.append({"role": "assistant", "content": "Which date?"})
+
+        self.assertEqual(
+            memory.get_conversation_history("thread-1"),
+            [{"role": "user", "content": "AAPL close"}]
+        )
+        memory.clear_conversation("thread-1")
+        self.assertEqual(memory.get_conversation_history("thread-1"), [])
     
     def test_long_term_memory_isolation(self):
         """Test long-term memory is isolated by user_id."""

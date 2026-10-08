@@ -20,7 +20,6 @@ class CLI:
         """Initialize CLI with user ID."""
         self.user_id = user_id
         self.memory = create_memory_manager(user_id)
-        self.conversation_history = []
         self.logger = None
         
     def print_welcome(self):
@@ -53,13 +52,14 @@ Available commands:
     
     def print_history(self):
         """Print conversation history."""
-        if not self.conversation_history:
+        conversation_history = self.memory.get_conversation_history(self.user_id)
+        if not conversation_history:
             print("No conversation history.")
             return
         
         print("\nConversation History:")
         print("-" * 40)
-        for i, msg in enumerate(self.conversation_history, 1):
+        for i, msg in enumerate(conversation_history, 1):
             role = msg.get("role", "unknown")
             content = msg.get("content", "")[:100]
             print(f"{i}. {role}: {content}...")
@@ -67,7 +67,7 @@ Available commands:
     
     def clear_history(self):
         """Clear conversation history."""
-        self.conversation_history = []
+        self.memory.clear_conversation(self.user_id)
         print("Conversation history cleared.")
     
     def handle_command(self, user_input: str) -> bool:
@@ -140,18 +140,24 @@ Available commands:
                         user_input=user_input,
                         user_id=self.user_id,
                         trace_id=trace_id,
-                        thread_id=self.user_id  # Use user_id as thread_id
+                        thread_id=self.user_id,  # Use user_id as thread_id
+                        conversation_history=self.memory.get_conversation_history(
+                            self.user_id
+                        )
                     )
                     
                     print(f"\n{response}\n")
                     
-                    # Add to history
-                    self.conversation_history.append(
+                    conversation_history = self.memory.get_conversation_history(
+                        self.user_id
+                    )
+                    conversation_history.append(
                         {"role": "user", "content": user_input}
                     )
-                    self.conversation_history.append(
+                    conversation_history.append(
                         {"role": "assistant", "content": response}
                     )
+                    self.memory.save_conversation(self.user_id, conversation_history)
                     
                 except Exception as e:
                     print(f"\nError: {e}\n")

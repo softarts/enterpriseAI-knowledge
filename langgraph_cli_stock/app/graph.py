@@ -2,7 +2,8 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Literal, TypedDict
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 from langgraph.checkpoint.memory import MemorySaver
@@ -10,6 +11,11 @@ from langgraph.checkpoint.memory import MemorySaver
 from .llm_client import get_llm_client
 from .tools import AVAILABLE_TOOLS, execute_tool, get_tool_names
 from .state import AgentState, ToolCall
+
+
+def _get_current_date() -> str:
+    """Return the current date in the application's local timezone."""
+    return datetime.now().astimezone().date().isoformat()
 
 
 def _parse_tool_arguments(arguments: Any) -> Dict[str, Any]:
@@ -71,7 +77,15 @@ def model_node(state: AgentState) -> AgentState:
     # Add system message
     system_message = {
         "role": "system",
-        "content": "You are a helpful AI assistant. When users ask about stock prices, use the stock_price tool to get the data."
+        "content": (
+            "You are a helpful AI assistant. When users ask about stock prices, "
+            "use the stock_price tool to get the data. Today's date is "
+            f"{_get_current_date()} in the application's local timezone. "
+            "Resolve relative dates such as 'yesterday' and '昨天' from today's "
+            "date, not from prior knowledge or conversation history. For follow-up "
+            "questions, retain the stock symbol and other relevant details from "
+            "the conversation."
+        )
     }
     
     # Call LLM
@@ -237,7 +251,13 @@ def get_graph() -> StateGraph:
     return _graph
 
 
-def run_agent(user_input: str, user_id: str, trace_id: str, thread_id: str = None) -> str:
+def run_agent(
+    user_input: str,
+    user_id: str,
+    trace_id: str,
+    thread_id: str = None,
+    conversation_history: Optional[List[Dict[str, Any]]] = None
+) -> str:
     """
     Run the agent with user input.
     
@@ -246,6 +266,7 @@ def run_agent(user_input: str, user_id: str, trace_id: str, thread_id: str = Non
         user_id: User ID for memory isolation
         trace_id: Trace ID for this conversation turn
         thread_id: Thread ID for conversation continuity
+        conversation_history: Earlier user and assistant messages in this conversation
         
     Returns:
         The final answer from the agent
@@ -267,7 +288,10 @@ def run_agent(user_input: str, user_id: str, trace_id: str, thread_id: str = Non
     
     # Prepare initial state
     initial_state = AgentState(
-        messages=[{"role": "user", "content": user_input}],
+        messages=[
+            *(message.copy() for message in conversation_history or []),
+            {"role": "user", "content": user_input}
+        ],
         user_id=user_id,
         trace_id=trace_id
     )
