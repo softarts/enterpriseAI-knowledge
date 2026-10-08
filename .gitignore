@@ -33,7 +33,7 @@ import_data/**
 *.db
 llmclient.py
 *.sh
-*.txt
+
 !/langchain_agent/requirements.txt
 .venv-py314/
 
