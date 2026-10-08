@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.store.memory import MemoryStore
+from langgraph.store.memory import InMemoryStore
 
 
 class MemoryManager:
@@ -14,7 +14,7 @@ class MemoryManager:
         """Initialize memory manager for a specific user."""
         self.user_id = user_id
         self.checkpointer = MemorySaver()
-        self.store = MemoryStore()
+        self.store = InMemoryStore()
         
         # Initialize namespace for user
         self._user_namespace = (user_id,)
@@ -43,7 +43,7 @@ class MemoryManager:
     
     def list_long_term_memory(self) -> List[str]:
         """List all keys in long-term memory for this user."""
-        return [item.key for item in self.store.list(self._user_namespace)]
+        return [item.key for item in self.store.search(self._user_namespace)]
 
 
 def create_memory_manager(user_id: str) -> MemoryManager:

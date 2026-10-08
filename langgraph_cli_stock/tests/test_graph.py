@@ -59,6 +59,74 @@ class TestAgentState(unittest.TestCase):
         self.assertEqual(state.user_id, "1234")
 
 
+class TestToolCallHandling(unittest.TestCase):
+    """Test parsing and executing LLM tool calls."""
+
+    def test_graph_parses_json_arguments_and_executes_tool_call(self):
+        from app.graph import run_agent
+
+        client = MagicMock()
+        client.chat.side_effect = [
+            {
+                "choices": [{
+                    "message": {
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "function": {
+                                "name": "stock_price",
+                                "arguments": '{"symbol":"AAPL","date":"2024-11-27"}'
+                            }
+                        }]
+                    }
+                }]
+            },
+            {"choices": [{"message": {"content": "Apple closed at $123.45."}}]}
+        ]
+
+        with (
+            patch("app.graph.get_llm_client", return_value=client),
+            patch("app.graph.execute_tool", return_value={"close": 123.45}) as execute_tool
+        ):
+            answer = run_agent(
+                "What was Apple's closing price?",
+                user_id="test-user",
+                trace_id="test-trace",
+                thread_id="test-tool-call-thread"
+            )
+
+        self.assertEqual(
+            execute_tool.call_args.args[:2],
+            (
+                "stock_price",
+                {"symbol": "AAPL", "date": "2024-11-27"}
+            )
+        )
+        self.assertEqual(answer, "Apple closed at $123.45.")
+
+    def test_model_node_rejects_invalid_json_arguments(self):
+        from app.graph import model_node
+        from app.state import AgentState
+
+        client = MagicMock()
+        client.chat.return_value = {
+            "choices": [{
+                "message": {
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "function": {
+                            "name": "stock_price",
+                            "arguments": '{"symbol":'
+                        }
+                    }]
+                }
+            }]
+        }
+
+        with patch("app.graph.get_llm_client", return_value=client):
+            with self.assertRaisesRegex(ValueError, "valid JSON"):
+                model_node(AgentState(trace_id="test-trace"))
+
+
 class TestMemory(unittest.TestCase):
     """Test memory management."""
     

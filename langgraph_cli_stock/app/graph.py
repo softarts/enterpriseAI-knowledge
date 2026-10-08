@@ -1,5 +1,6 @@
 """LangGraph agent implementation."""
 
+import json
 import logging
 from typing import Any, Dict, List, Literal, TypedDict
 
@@ -8,7 +9,21 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from .llm_client import get_llm_client
 from .tools import AVAILABLE_TOOLS, execute_tool, get_tool_names
-from .state import AgentState
+from .state import AgentState, ToolCall
+
+
+def _parse_tool_arguments(arguments: Any) -> Dict[str, Any]:
+    """Parse tool arguments supplied as a JSON string or dictionary."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError as error:
+            raise ValueError("Tool-call arguments must contain valid JSON") from error
+
+    if not isinstance(arguments, dict):
+        raise TypeError("Tool-call arguments must be a JSON object")
+
+    return arguments
 
 
 # Define the graph nodes
@@ -75,18 +90,21 @@ def model_node(state: AgentState) -> AgentState:
             tool_calls = message.get("tool_calls", [])
             if tool_calls:
                 state.tool_calls = [
-                    {
-                        "id": tc.get("id", ""),
-                        "name": tc.get("function", {}).get("name", ""),
-                        "arguments": tc.get("function", {}).get("arguments", {})
-                    }
+                    ToolCall(
+                        id=tc.get("id", ""),
+                        name=tc.get("function", {}).get("name", ""),
+                        arguments=_parse_tool_arguments(
+                            tc.get("function", {}).get("arguments", {})
+                        )
+                    )
                     for tc in tool_calls
                 ]
                 
-                extra["payload"]["tool_calls"] = [tc["name"] for tc in state.tool_calls]
+                extra["payload"]["tool_calls"] = [tc.name for tc in state.tool_calls]
                 logger.info(f"Model requested tools: {extra['payload']['tool_calls']}", extra=extra)
             else:
                 # No tool calls, this is the final answer
+                state.tool_calls = []
                 state.final_answer = message.get("content", "")
                 logger.info("Model provided final answer", extra=extra)
         
@@ -120,16 +138,8 @@ def tool_node(state: AgentState) -> AgentState:
     tool_results = []
     
     for tool_call in state.tool_calls:
-        tool_name = tool_call.get("name", "")
-        tool_args = tool_call.get("arguments", {})
-        
-        # Handle string arguments (they come as JSON string from LLM)
-        if isinstance(tool_args, str):
-            import json
-            try:
-                tool_args = json.loads(tool_args)
-            except json.JSONDecodeError:
-                tool_args = {}
+        tool_name = tool_call.name
+        tool_args = tool_call.arguments
         
         logger.info(f"Executing tool: {tool_name}", extra={
             "trace_id": state.trace_id,
@@ -142,7 +152,7 @@ def tool_node(state: AgentState) -> AgentState:
         result = execute_tool(tool_name, tool_args, logger)
         
         tool_results.append({
-            "tool_call_id": tool_call.get("id", ""),
+            "tool_call_id": tool_call.id,
             "tool_name": tool_name,
             "result": result
         })
@@ -268,6 +278,9 @@ def run_agent(user_input: str, user_id: str, trace_id: str, thread_id: str = Non
     # Run the graph
     try:
         result = get_graph().invoke(initial_state, config)
+        final_answer = result.get("final_answer")
+        tool_calls = result.get("tool_calls", [])
+        tool_results = result.get("tool_results", [])
         
         # Log final response
         logger.info("Agent completed", extra={
@@ -275,13 +288,13 @@ def run_agent(user_input: str, user_id: str, trace_id: str, thread_id: str = Non
             "event_type": "final_response",
             "component": "graph",
             "payload": {
-                "final_answer": result.final_answer,
-                "has_tool_calls": bool(result.tool_calls),
-                "tool_results_count": len(result.tool_results) if result.tool_results else 0
+                "final_answer": final_answer,
+                "has_tool_calls": bool(tool_calls),
+                "tool_results_count": len(tool_results)
             }
         })
         
-        return result.final_answer or "No response generated"
+        return final_answer or "No response generated"
         
     except Exception as e:
         logger.error(f"Agent error: {e}", extra={
