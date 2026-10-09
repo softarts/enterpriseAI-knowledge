@@ -204,6 +204,16 @@ yfinance API
 final_answer --> 输出
 ```
 
+### LangGraph 状态图
+
+```mermaid
+flowchart TD
+    start([START]) --> agent["agent<br/>model_node"]
+    agent -->|有工具调用| tools["tools<br/>tool_node"]
+    agent -->|无工具调用| finish([END])
+    tools --> agent
+```
+
 ## Call Trace 实现
 
 ### 使用的库
